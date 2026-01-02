@@ -1,0 +1,28 @@
+# configs/config.dev.yaml
+# 开发环境配置覆盖
+
+app:
+  env: "development"
+
+server:
+  http:
+    port: 8080
+
+observability:
+  logging:
+    level: "debug"
+    format: "text"
+  tracing:
+    sample_rate: 1.0
+
+security:
+  rate_limit:
+    enabled: false
+  cors:
+    allowed_origins:
+      - "*"
+
+features:
+  validation:
+    enabled: true
+    default_pass_on_failure: true

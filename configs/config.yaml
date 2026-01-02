@@ -1,0 +1,153 @@
+# configs/config.yaml
+# AI 小说生成后端主配置文件
+
+app:
+  name: "z-novel-ai-api"
+  version: "${VERSION:v0.0.0}"
+  env: "${APP_ENV:development}"
+
+server:
+  http:
+    host: "0.0.0.0"
+    port: 8080
+    read_timeout: 30s
+    write_timeout: 60s
+    idle_timeout: 120s
+  grpc:
+    host: "0.0.0.0"
+    port: 9090
+    max_recv_msg_size: 16777216 # 16MB
+    max_send_msg_size: 16777216
+
+database:
+  postgres:
+    host: "${DB_HOST:localhost}"
+    port: ${DB_PORT:5432}
+    user: "${DB_USER:postgres}"
+    password: "${DB_PASSWORD}" # 通过 Vault 注入
+    database: "${DB_NAME:z_novel_ai}"
+    ssl_mode: "disable"
+    max_open_conns: 50
+    max_idle_conns: 10
+    conn_max_lifetime: 30m
+    conn_max_idle_time: 5m
+
+cache:
+  redis:
+    host: "${REDIS_HOST:localhost}"
+    port: ${REDIS_PORT:6379}
+    password: "${REDIS_PASSWORD}" # 通过 Vault 注入
+    db: 0
+    pool_size: 100
+    min_idle_conns: 10
+    dial_timeout: 5s
+    read_timeout: 3s
+    write_timeout: 3s
+
+vector:
+  milvus:
+    host: "${MILVUS_HOST:localhost}"
+    port: ${MILVUS_PORT:19530}
+    user: "${MILVUS_USER}"
+    password: "${MILVUS_PASSWORD}" # 通过 Vault 注入
+    collection_prefix: "z_novel"
+    index_type: "HNSW"
+    metric_type: "COSINE"
+    hnsw_m: 16
+    hnsw_ef_construction: 200
+
+storage:
+  s3:
+    endpoint: "${S3_ENDPOINT:localhost:9000}"
+    region: "${S3_REGION:us-east-1}"
+    access_key: "${S3_ACCESS_KEY}" # 通过 Vault 注入
+    secret_key: "${S3_SECRET_KEY}" # 通过 Vault 注入
+    bucket: "${S3_BUCKET:z-novel-ai}"
+    use_ssl: false
+
+llm:
+  default_provider: "openai"
+  providers:
+    openai:
+      api_key: "${OPENAI_API_KEY}" # 通过 Vault 注入
+      base_url: "https://api.openai.com/v1"
+      model: "gpt-4o"
+      max_tokens: 8192
+      temperature: 0.7
+      timeout: 120s
+    deepseek:
+      api_key: "${DEEPSEEK_API_KEY}" # 通过 Vault 注入
+      base_url: "https://api.deepseek.com"
+      model: "deepseek-chat"
+      max_tokens: 8192
+      temperature: 0.7
+      timeout: 120s
+  fallback_chain:
+    - "openai"
+    - "deepseek"
+
+embedding:
+  provider: "local"
+  model: "BAAI/bge-m3"
+  dimension: 1024
+  batch_size: 32
+  endpoint: "${EMBEDDING_ENDPOINT:http://localhost:8000}"
+
+messaging:
+  redis_stream:
+    max_len: 100000
+    consumer_group_prefix: "cg"
+    block_timeout: 5s
+    claim_interval: 30s
+    retry_limit: 3
+    retry_backoff:
+      initial: 1s
+      max: 60s
+      multiplier: 2
+
+observability:
+  logging:
+    level: "${LOG_LEVEL:info}"
+    format: "json"
+    output: "stdout"
+  tracing:
+    enabled: true
+    exporter: "otlp"
+    endpoint: "${OTLP_ENDPOINT:localhost:4317}"
+    sample_rate: 1.0
+  metrics:
+    enabled: true
+    port: 9091
+    path: "/metrics"
+
+security:
+  jwt:
+    secret: "${JWT_SECRET}" # 通过 Vault 注入
+    issuer: "z-novel-ai"
+    expiration: 24h
+    refresh_expiration: 168h # 7 days
+  rate_limit:
+    enabled: true
+    requests_per_second: 100
+    burst: 200
+  cors:
+    allowed_origins:
+      - "*"
+    allowed_methods:
+      - "GET"
+      - "POST"
+      - "PUT"
+      - "DELETE"
+    allowed_headers:
+      - "Authorization"
+      - "Content-Type"
+      - "X-Request-ID"
+      - "Idempotency-Key"
+
+features:
+  validation:
+    enabled: true
+    default_pass_on_failure: true
+  memory_writeback:
+    enabled: true
+    async: true
