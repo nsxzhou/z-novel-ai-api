@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/spf13/viper"
@@ -13,38 +14,28 @@ import (
 // 按优先级加载：默认配置 -> 环境配置 -> 环境变量
 func Load() (*Config, error) {
 	v := viper.New()
-
-	// 设置配置文件路径
-	v.SetConfigName("config")
 	v.SetConfigType("yaml")
-	v.AddConfigPath("./configs")
-	v.AddConfigPath("/etc/z-novel-ai")
-	v.AddConfigPath(".")
 
-	// 读取默认配置
-	if err := v.ReadInConfig(); err != nil {
-		return nil, fmt.Errorf("failed to read config file: %w", err)
+	// 1. 加载默认配置
+	if err := loadConfigFile(v, "configs/config.yaml", false); err != nil {
+		return nil, err
 	}
 
-	// 读取环境特定配置
+	// 2. 加载环境特定配置
 	env := os.Getenv("APP_ENV")
 	if env == "" {
 		env = "development"
 	}
-
-	v.SetConfigName("config." + env)
-	if err := v.MergeInConfig(); err != nil {
-		// 环境配置可选，不存在不报错
-		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
-			return nil, fmt.Errorf("failed to merge env config: %w", err)
-		}
+	envFile := fmt.Sprintf("configs/config.%s.yaml", env)
+	if err := loadConfigFile(v, envFile, true); err != nil {
+		return nil, err
 	}
 
-	// 绑定环境变量
+	// 3. 绑定环境变量 (直接覆盖)
 	v.AutomaticEnv()
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 
-	// 设置默认值
+	// 设置默认值 (兜底)
 	setDefaults(v)
 
 	// 解析配置
@@ -54,6 +45,58 @@ func Load() (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+// loadConfigFile 读取文件，执行环境变量替换，并加载到 viper
+func loadConfigFile(v *viper.Viper, path string, optional bool) error {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		if optional && os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to read config file %s: %w", path, err)
+	}
+
+	// 执行环境变量替换
+	expanded := expandEnv(string(content))
+
+	// 加载到 viper
+	reader := strings.NewReader(expanded)
+	if v.ConfigFileUsed() == "" {
+		if err := v.ReadConfig(reader); err != nil {
+			return fmt.Errorf("failed to read processed config %s: %w", path, err)
+		}
+		// 手动标记已加载文件，防止后续 ReadInConfig 报错
+		v.SetConfigFile(path)
+	} else {
+		if err := v.MergeConfig(reader); err != nil {
+			return fmt.Errorf("failed to merge processed config %s: %w", path, err)
+		}
+	}
+
+	return nil
+}
+
+// expandEnv 替换字符串中的 ${VAR:default} 占位符
+func expandEnv(s string) string {
+	// 匹配 ${VAR} 或 ${VAR:default}
+	// g1: 变量名, g2: 默认值部分（含冒号）, g3: 默认值内容
+	re := regexp.MustCompile(`\${(\w+)(:([^}]*))?}`)
+	return re.ReplaceAllStringFunc(s, func(match string) string {
+		submatch := re.FindStringSubmatch(match)
+		key := submatch[1]
+		hasDefault := submatch[2] != ""
+		defVal := submatch[3]
+
+		val, ok := os.LookupEnv(key)
+		if ok {
+			return val
+		}
+		if hasDefault {
+			return defVal
+		}
+		return match // 原样返回，或者返回空？保留原样以便识别未定义的变量
+	})
 }
 
 // MustLoad 加载配置，失败时 panic
