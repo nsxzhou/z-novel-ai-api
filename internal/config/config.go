@@ -252,6 +252,7 @@ type CORSConfig struct {
 type FeaturesConfig struct {
 	Validation      ValidationFeature      `yaml:"validation" mapstructure:"validation"`
 	MemoryWriteback MemoryWritebackFeature `yaml:"memory_writeback" mapstructure:"memory_writeback"`
+	Core            CoreFeature            `yaml:"core" mapstructure:"core"`
 }
 
 // ValidationFeature 校验功能开关
@@ -264,4 +265,9 @@ type ValidationFeature struct {
 type MemoryWritebackFeature struct {
 	Enabled bool `yaml:"enabled" mapstructure:"enabled"`
 	Async   bool `yaml:"async" mapstructure:"async"`
+}
+
+// CoreFeature 核心业务功能开关（生成/检索/记忆/校验等）
+type CoreFeature struct {
+	Enabled bool `yaml:"enabled" mapstructure:"enabled"`
 }

@@ -190,4 +190,5 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("features.validation.default_pass_on_failure", true)
 	v.SetDefault("features.memory_writeback.enabled", true)
 	v.SetDefault("features.memory_writeback.async", true)
+	v.SetDefault("features.core.enabled", false)
 }

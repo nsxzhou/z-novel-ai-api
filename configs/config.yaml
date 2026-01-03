@@ -158,3 +158,5 @@ features:
   memory_writeback:
     enabled: true
     async: true
+  core:
+    enabled: false

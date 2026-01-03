@@ -2,14 +2,11 @@
 package handler
 
 import (
-	"encoding/json"
 	"net/http"
 
-	"z-novel-ai-api/internal/domain/entity"
 	"z-novel-ai-api/internal/domain/repository"
 	"z-novel-ai-api/internal/infrastructure/messaging"
 	"z-novel-ai-api/internal/interfaces/http/dto"
-	"z-novel-ai-api/internal/interfaces/http/middleware"
 	"z-novel-ai-api/pkg/errors"
 	"z-novel-ai-api/pkg/logger"
 
@@ -246,104 +243,7 @@ func (h *ChapterHandler) DeleteChapter(c *gin.Context) {
 // @Failure 500 {object} dto.ErrorResponse
 // @Router /v1/projects/{pid}/chapters/generate [post]
 func (h *ChapterHandler) GenerateChapter(c *gin.Context) {
-	ctx := c.Request.Context()
-	projectID := dto.BindProjectID(c)
-
-	var req dto.GenerateChapterRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		dto.BadRequest(c, "invalid request body: "+err.Error())
-		return
-	}
-
-	tenantID := middleware.GetTenantID(ctx)
-	if tenantID == "" {
-		dto.BadRequest(c, "missing tenant_id")
-		return
-	}
-
-	// 验证项目存在
-	project, err := h.projectRepo.GetByID(ctx, projectID)
-	if err != nil {
-		logger.Error(ctx, "failed to get project", err)
-		dto.InternalError(c, "failed to create generation task")
-		return
-	}
-	if project == nil {
-		dto.NotFound(c, "project not found")
-		return
-	}
-
-	// 创建章节记录（状态置为 generating）
-	maxSeq, err := h.chapterRepo.GetNextSeqNum(ctx, projectID, req.VolumeID)
-	if err != nil {
-		logger.Error(ctx, "failed to get next seq num", err)
-		dto.InternalError(c, "failed to create generation task")
-		return
-	}
-
-	chapter := entity.NewChapter(projectID, req.VolumeID, maxSeq)
-	chapter.Title = req.Title
-	chapter.Outline = req.Outline
-	chapter.Notes = req.Notes
-	chapter.StoryTimeStart = req.StoryTimeStart
-	chapter.Status = entity.ChapterStatusGenerating
-
-	if err := h.chapterRepo.Create(ctx, chapter); err != nil {
-		logger.Error(ctx, "failed to create chapter", err)
-		dto.InternalError(c, "failed to create generation task")
-		return
-	}
-
-	params := map[string]interface{}{
-		"outline":           req.Outline,
-		"target_word_count": req.TargetWordCount,
-		"story_time_start":  req.StoryTimeStart,
-	}
-	if req.Options != nil {
-		params["options"] = map[string]interface{}{
-			"model":           req.Options.Model,
-			"temperature":     req.Options.Temperature,
-			"skip_validation": req.Options.SkipValidation,
-			"max_retries":     req.Options.MaxRetries,
-		}
-	}
-	inputParams, _ := json.Marshal(params)
-
-	job := entity.NewGenerationJob(tenantID, projectID, entity.JobTypeChapterGen, inputParams)
-	job.ChapterID = chapter.ID
-	job.UpdateProgress(0)   
-
-	if err := h.jobRepo.Create(ctx, job); err != nil {
-		logger.Error(ctx, "failed to create job", err)
-		dto.InternalError(c, "failed to create generation task")
-		return
-	}
-
-	// 发送到消息队列（由 job-worker 执行）
-	_, err = h.producer.PublishGenJob(ctx, &messaging.GenerationJobMessage{
-		JobID:     job.ID,
-		TenantID:  tenantID,
-		ProjectID: projectID,
-		ChapterID: chapter.ID,
-		JobType:   string(job.JobType),
-		Priority:  job.Priority,
-		Params:    params,
-	})
-	if err != nil {
-		logger.Error(ctx, "failed to publish generation job", err)
-		dto.InternalError(c, "failed to enqueue generation task")
-		return
-	}
-
-	logger.Info(ctx, "generate chapter request received",
-		"project_id", projectID,
-		"chapter_id", chapter.ID,
-		"job_id", job.ID,
-		"outline", req.Outline,
-		"target_word_count", req.TargetWordCount,
-	)
-
-	dto.Accepted(c, dto.ToJobResponse(job))
+	dto.Error(c, 501, "chapter generation not implemented")
 }
 
 // RegenerateChapter 重新生成章节
@@ -360,92 +260,5 @@ func (h *ChapterHandler) GenerateChapter(c *gin.Context) {
 // @Failure 500 {object} dto.ErrorResponse
 // @Router /v1/chapters/{cid}/regenerate [post]
 func (h *ChapterHandler) RegenerateChapter(c *gin.Context) {
-	ctx := c.Request.Context()
-	chapterID := dto.BindChapterID(c)
-
-	var req dto.RegenerateChapterRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		dto.BadRequest(c, "invalid request body: "+err.Error())
-		return
-	}
-
-	// 验证章节存在
-	chapter, err := h.chapterRepo.GetByID(ctx, chapterID)
-	if err != nil {
-		logger.Error(ctx, "failed to get chapter", err)
-		dto.InternalError(c, "failed to get chapter")
-		return
-	}
-
-	if chapter == nil {
-		dto.NotFound(c, "chapter not found")
-		return
-	}
-
-	tenantID := middleware.GetTenantID(ctx)
-	if tenantID == "" {
-		dto.BadRequest(c, "missing tenant_id")
-		return
-	}
-
-	// 应用更新（可选覆盖大纲）
-	if req.Outline != "" {
-		chapter.Outline = req.Outline
-	}
-	chapter.ContentText = ""
-	chapter.WordCount = 0
-	chapter.Status = entity.ChapterStatusGenerating
-
-	if err := h.chapterRepo.Update(ctx, chapter); err != nil {
-		logger.Error(ctx, "failed to update chapter", err)
-		dto.InternalError(c, "failed to create regeneration task")
-		return
-	}
-
-	params := map[string]interface{}{
-		"outline":           chapter.Outline,
-		"target_word_count": req.TargetWordCount,
-		"story_time_start":  chapter.StoryTimeStart,
-	}
-	if req.Options != nil {
-		params["options"] = map[string]interface{}{
-			"model":           req.Options.Model,
-			"temperature":     req.Options.Temperature,
-			"skip_validation": req.Options.SkipValidation,
-			"max_retries":     req.Options.MaxRetries,
-		}
-	}
-	inputParams, _ := json.Marshal(params)
-
-	job := entity.NewGenerationJob(tenantID, chapter.ProjectID, entity.JobTypeChapterGen, inputParams)
-	job.ChapterID = chapter.ID
-	job.UpdateProgress(0)
-
-	if err := h.jobRepo.Create(ctx, job); err != nil {
-		logger.Error(ctx, "failed to create job", err)
-		dto.InternalError(c, "failed to create regeneration task")
-		return
-	}
-
-	_, err = h.producer.PublishGenJob(ctx, &messaging.GenerationJobMessage{
-		JobID:     job.ID,
-		TenantID:  tenantID,
-		ProjectID: chapter.ProjectID,
-		ChapterID: chapter.ID,
-		JobType:   string(job.JobType),
-		Priority:  job.Priority,
-		Params:    params,
-	})
-	if err != nil {
-		logger.Error(ctx, "failed to publish regeneration job", err)
-		dto.InternalError(c, "failed to enqueue regeneration task")
-		return
-	}
-
-	logger.Info(ctx, "regenerate chapter request received",
-		"chapter_id", chapterID,
-		"job_id", job.ID,
-	)
-
-	dto.Accepted(c, dto.ToJobResponse(job))
+	dto.Error(c, 501, "chapter regeneration not implemented")
 }
