@@ -1,0 +1,119 @@
+version: "3.8"
+
+services:
+  # PostgreSQL 16 - 支持 RLS 多租户隔离
+  postgres:
+    image: postgres:16-alpine
+    container_name: z-novel-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: your_postgres_password
+      POSTGRES_DB: z_novel_ai
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis 7 - 用于缓存和 Streams 消息队列
+  redis:
+    image: redis:7-alpine
+    container_name: z-novel-redis
+    command: redis-server --requirepass your_redis_password
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "your_redis_password", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MinIO - 仅供 Milvus 内部使用的对象存储
+  minio:
+    image: minio/minio
+    container_name: z-novel-minio-internal
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    expose:
+      - "9000"
+    ports:
+      - "9001:9001" # 仅保留控制台端口以便调试
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Jaeger - 分布式追踪
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: z-novel-jaeger
+    ports:
+      - "16686:16686" # UI
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+
+  # Prometheus - 指标监控
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: z-novel-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deployments/docker/prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+
+  # Etcd - Milvus 依赖
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.5
+    container_name: z-novel-milvus-etcd
+    environment:
+      - ETCD_AUTO_COMPACTION_RETENTION=1
+      - ALLOW_NONE_AUTHENTICATION=yes
+    volumes:
+      - etcd_data:/bitnami/etcd
+
+  # MinIO (Milvus 依赖, 这里复用上面的 minio 服务或单独起一个)
+  # 为了简化，Milvus 也使用上面的 minio
+
+  # Milvus Standalone - 向量数据库
+  milvus:
+    image: milvusdb/milvus:v2.4.0
+    container_name: z-novel-milvus
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    depends_on:
+      - etcd
+      - minio
+    volumes:
+      - milvus_data:/var/lib/milvus
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  etcd_data:
+  milvus_data:
+
+networks:
+  default:
+    name: z-novel-network
