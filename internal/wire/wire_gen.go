@@ -10,10 +10,14 @@ import (
 	"context"
 	"github.com/google/wire"
 	"z-novel-ai-api/internal/config"
+	"z-novel-ai-api/internal/domain/repository"
 	"z-novel-ai-api/internal/infrastructure/messaging"
 	"z-novel-ai-api/internal/infrastructure/persistence/milvus"
 	"z-novel-ai-api/internal/infrastructure/persistence/postgres"
 	"z-novel-ai-api/internal/infrastructure/persistence/redis"
+	"z-novel-ai-api/internal/interfaces/http/handler"
+	"z-novel-ai-api/internal/interfaces/http/middleware"
+	"z-novel-ai-api/internal/interfaces/http/router"
 )
 
 // Injectors from wire.go:
@@ -77,6 +81,84 @@ func InitializeDataLayer(ctx context.Context, cfg *config.Config) (*DataLayer, f
 	}, nil
 }
 
+// InitializeApp 初始化整个应用（带路由器）
+func InitializeApp(ctx context.Context, cfg *config.Config) (*router.Router, func(), error) {
+	authConfig := ProvideAuthConfig(cfg)
+	authHandler := handler.NewAuthHandler(authConfig)
+	healthHandler := handler.NewHealthHandler()
+	client, cleanup, err := ProvidePostgresClient(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	projectRepository := postgres.NewProjectRepository(client)
+	projectHandler := handler.NewProjectHandler(projectRepository)
+	volumeRepository := postgres.NewVolumeRepository(client)
+	volumeHandler := handler.NewVolumeHandler(volumeRepository)
+	chapterRepository := postgres.NewChapterRepository(client)
+	jobRepository := postgres.NewJobRepository(client)
+	redisClient, cleanup2, err := ProvideRedisClient(cfg)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	producer := ProvideMessagingProducer(redisClient, cfg)
+	chapterHandler := handler.NewChapterHandler(chapterRepository, projectRepository, jobRepository, producer)
+	entityRepository := postgres.NewEntityRepository(client)
+	relationRepository := postgres.NewRelationRepository(client)
+	entityHandler := handler.NewEntityHandler(entityRepository, relationRepository)
+	jobHandler := handler.NewJobHandler(jobRepository)
+	retrievalGRPCConn, cleanup3, err := ProvideRetrievalGRPCConn(ctx, cfg)
+	if err != nil {
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	retrievalServiceClient := ProvideRetrievalGRPCClient(retrievalGRPCConn)
+	retrievalHandler := handler.NewRetrievalHandler(retrievalServiceClient)
+	txManager := postgres.NewTxManager(client)
+	tenantContext := postgres.NewTenantContext(client)
+	storyGenGRPCConn, cleanup4, err := ProvideStoryGenGRPCConn(ctx, cfg)
+	if err != nil {
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	storyGenServiceClient := ProvideStoryGenGRPCClient(storyGenGRPCConn)
+	streamHandler := handler.NewStreamHandler(chapterRepository, txManager, tenantContext, storyGenServiceClient)
+	userRepository := postgres.NewUserRepository(client)
+	userHandler := handler.NewUserHandler(userRepository)
+	tenantRepository := postgres.NewTenantRepository(client)
+	tenantHandler := handler.NewTenantHandler(tenantRepository)
+	eventRepository := postgres.NewEventRepository(client)
+	eventHandler := handler.NewEventHandler(eventRepository)
+	rateLimiter := redis.NewRateLimiter(redisClient)
+	routerHandlers := &router.RouterHandlers{
+		Auth:         authHandler,
+		Health:       healthHandler,
+		Project:      projectHandler,
+		Volume:       volumeHandler,
+		Chapter:      chapterHandler,
+		Entity:       entityHandler,
+		Job:          jobHandler,
+		Retrieval:    retrievalHandler,
+		Stream:       streamHandler,
+		User:         userHandler,
+		Tenant:       tenantHandler,
+		Event:        eventHandler,
+		RateLimiter:  rateLimiter,
+		Transactor:   txManager,
+		TenantCtxMgr: tenantContext,
+	}
+	routerRouter := router.NewWithDeps(cfg, routerHandlers)
+	return routerRouter, func() {
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+	}, nil
+}
+
 // wire.go:
 
 // DataLayer 数据层依赖容器
@@ -115,7 +197,7 @@ var PostgresSet = wire.NewSet(
 
 // RedisSet Redis 提供者集合
 var RedisSet = wire.NewSet(
-	ProvideRedisClient, redis.NewCache, redis.NewRateLimiter,
+	ProvideRedisClient, redis.NewCache, redis.NewRateLimiter, wire.Bind(new(middleware.RateLimiter), new(*redis.RateLimiter)),
 )
 
 // MessagingSet 消息队列提供者集合
@@ -126,6 +208,28 @@ var MessagingSet = wire.NewSet(
 // MilvusSet Milvus 提供者集合
 var MilvusSet = wire.NewSet(
 	ProvideMilvusClient, milvus.NewRepository,
+)
+
+// GRPCClientsSet gRPC 客户端提供者集合（API Gateway 使用）
+var GRPCClientsSet = wire.NewSet(
+	ProvideRetrievalGRPCConn,
+	ProvideRetrievalGRPCClient,
+	ProvideStoryGenGRPCConn,
+	ProvideStoryGenGRPCClient,
+	ProvideMemoryGRPCConn,
+	ProvideMemoryGRPCClient,
+	ProvideValidatorGRPCConn,
+	ProvideValidatorGRPCClient,
+)
+
+// RouterSet 路由器提供者集合
+var RouterSet = wire.NewSet(
+	ProvideAuthConfig, handler.NewAuthHandler, handler.NewHealthHandler, handler.NewProjectHandler, handler.NewVolumeHandler, handler.NewChapterHandler, handler.NewEntityHandler, handler.NewJobHandler, handler.NewRetrievalHandler, handler.NewStreamHandler, handler.NewUserHandler, handler.NewTenantHandler, handler.NewEventHandler, wire.Struct(new(router.RouterHandlers), "*"), router.NewWithDeps,
+)
+
+// RepoSet 整合了具体实现与接口绑定的集合
+var RepoSet = wire.NewSet(
+	PostgresSet, wire.Bind(new(repository.Transactor), new(*postgres.TxManager)), wire.Bind(new(repository.TenantContextManager), new(*postgres.TenantContext)), wire.Bind(new(repository.TenantRepository), new(*postgres.TenantRepository)), wire.Bind(new(repository.UserRepository), new(*postgres.UserRepository)), wire.Bind(new(repository.ProjectRepository), new(*postgres.ProjectRepository)), wire.Bind(new(repository.VolumeRepository), new(*postgres.VolumeRepository)), wire.Bind(new(repository.ChapterRepository), new(*postgres.ChapterRepository)), wire.Bind(new(repository.EntityRepository), new(*postgres.EntityRepository)), wire.Bind(new(repository.RelationRepository), new(*postgres.RelationRepository)), wire.Bind(new(repository.JobRepository), new(*postgres.JobRepository)), wire.Bind(new(repository.EventRepository), new(*postgres.EventRepository)),
 )
 
 // ProvidePostgresClient 提供 PostgreSQL 客户端
@@ -171,4 +275,14 @@ func ProvideMilvusClient(ctx context.Context, cfg *config.Config) (*milvus.Clien
 		client.Close()
 	}
 	return client, cleanup, nil
+}
+
+// ProvideAuthConfig 提供认证配置
+func ProvideAuthConfig(cfg *config.Config) middleware.AuthConfig {
+	return middleware.AuthConfig{
+		Secret:    cfg.Security.JWT.Secret,
+		Issuer:    cfg.Security.JWT.Issuer,
+		SkipPaths: middleware.DefaultSkipPaths,
+		Enabled:   true,
+	}
 }

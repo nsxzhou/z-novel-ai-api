@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"z-novel-ai-api/internal/config"
-	"z-novel-ai-api/internal/interfaces/http/router"
+	"z-novel-ai-api/internal/wire"
 	"z-novel-ai-api/pkg/logger"
 	"z-novel-ai-api/pkg/tracer"
 )
@@ -52,23 +52,30 @@ func main() {
 		Enabled:     cfg.Observability.Tracing.Enabled,
 	})
 	if err != nil {
-		log.Error("failed to init tracer", err)
+		log.Error("failed to init tracer", "error", err)
 		os.Exit(1)
 	}
 	defer func() {
 		if err := shutdown(ctx); err != nil {
-			log.Error("failed to shutdown tracer", err)
+			log.Error("failed to shutdown tracer", "error", err)
 		}
 	}()
 
-	// 创建路由
-	r := router.New(cfg)
+	// 初始化应用（使用 Wire 注入）
+	app, cleanupApp, err := wire.InitializeApp(ctx, cfg)
+	if err != nil {
+		logger.Fatal(ctx, "failed to initialize app", err)
+	}
+	defer cleanupApp()
+
+	// 获取引擎
+	r := app.Engine()
 
 	// 创建 HTTP 服务器
 	addr := fmt.Sprintf("%s:%d", cfg.Server.HTTP.Host, cfg.Server.HTTP.Port)
 	srv := &http.Server{
 		Addr:         addr,
-		Handler:      r.Engine(),
+		Handler:      r,
 		ReadTimeout:  cfg.Server.HTTP.ReadTimeout,
 		WriteTimeout: cfg.Server.HTTP.WriteTimeout,
 		IdleTimeout:  cfg.Server.HTTP.IdleTimeout,
@@ -78,7 +85,7 @@ func main() {
 	go func() {
 		log.Info("http server starting", "addr", addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Error("http server error", err)
+			log.Error("http server error", "error", err)
 			os.Exit(1)
 		}
 	}()
@@ -95,7 +102,7 @@ func main() {
 	defer cancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		log.Error("server forced to shutdown", err)
+		log.Error("server forced to shutdown", "error", err)
 	}
 
 	log.Info("server exited")

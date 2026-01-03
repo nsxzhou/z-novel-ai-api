@@ -10,10 +10,14 @@ import (
 	"github.com/google/wire"
 
 	"z-novel-ai-api/internal/config"
+	"z-novel-ai-api/internal/domain/repository"
 	"z-novel-ai-api/internal/infrastructure/messaging"
 	"z-novel-ai-api/internal/infrastructure/persistence/milvus"
 	"z-novel-ai-api/internal/infrastructure/persistence/postgres"
 	"z-novel-ai-api/internal/infrastructure/persistence/redis"
+	"z-novel-ai-api/internal/interfaces/http/handler"
+	"z-novel-ai-api/internal/interfaces/http/middleware"
+	"z-novel-ai-api/internal/interfaces/http/router"
 )
 
 // DataLayer 数据层依赖容器
@@ -48,11 +52,23 @@ type DataLayer struct {
 // InitializeDataLayer 初始化数据层
 func InitializeDataLayer(ctx context.Context, cfg *config.Config) (*DataLayer, func(), error) {
 	wire.Build(
-		PostgresSet,
+		RepoSet,
 		RedisSet,
 		MessagingSet,
 		MilvusSet,
 		wire.Struct(new(DataLayer), "*"),
+	)
+	return nil, nil, nil
+}
+
+// InitializeApp 初始化整个应用（带路由器）
+func InitializeApp(ctx context.Context, cfg *config.Config) (*router.Router, func(), error) {
+	wire.Build(
+		RepoSet,
+		RedisSet,
+		MessagingSet,
+		GRPCClientsSet,
+		RouterSet,
 	)
 	return nil, nil, nil
 }
@@ -78,6 +94,7 @@ var RedisSet = wire.NewSet(
 	ProvideRedisClient,
 	redis.NewCache,
 	redis.NewRateLimiter,
+	wire.Bind(new(middleware.RateLimiter), new(*redis.RateLimiter)),
 )
 
 // MessagingSet 消息队列提供者集合
@@ -89,6 +106,54 @@ var MessagingSet = wire.NewSet(
 var MilvusSet = wire.NewSet(
 	ProvideMilvusClient,
 	milvus.NewRepository,
+)
+
+// GRPCClientsSet gRPC 客户端提供者集合
+var GRPCClientsSet = wire.NewSet(
+	ProvideRetrievalGRPCConn,
+	ProvideRetrievalGRPCClient,
+	ProvideStoryGenGRPCConn,
+	ProvideStoryGenGRPCClient,
+	ProvideMemoryGRPCConn,
+	ProvideMemoryGRPCClient,
+	ProvideValidatorGRPCConn,
+	ProvideValidatorGRPCClient,
+)
+
+// RouterSet 路由器提供者集合
+var RouterSet = wire.NewSet(
+	ProvideAuthConfig,
+	handler.NewAuthHandler,
+	handler.NewHealthHandler,
+	handler.NewProjectHandler,
+	handler.NewVolumeHandler,
+	handler.NewChapterHandler,
+	handler.NewEntityHandler,
+	handler.NewJobHandler,
+	handler.NewRetrievalHandler,
+	handler.NewStreamHandler,
+	handler.NewUserHandler,
+	handler.NewTenantHandler,
+	handler.NewEventHandler,
+	wire.Struct(new(router.RouterHandlers), "*"),
+	router.NewWithDeps,
+)
+
+// RepoSet 整合了具体实现与接口绑定的集合
+var RepoSet = wire.NewSet(
+	PostgresSet,
+	// 接口绑定
+	wire.Bind(new(repository.Transactor), new(*postgres.TxManager)),
+	wire.Bind(new(repository.TenantContextManager), new(*postgres.TenantContext)),
+	wire.Bind(new(repository.TenantRepository), new(*postgres.TenantRepository)),
+	wire.Bind(new(repository.UserRepository), new(*postgres.UserRepository)),
+	wire.Bind(new(repository.ProjectRepository), new(*postgres.ProjectRepository)),
+	wire.Bind(new(repository.VolumeRepository), new(*postgres.VolumeRepository)),
+	wire.Bind(new(repository.ChapterRepository), new(*postgres.ChapterRepository)),
+	wire.Bind(new(repository.EntityRepository), new(*postgres.EntityRepository)),
+	wire.Bind(new(repository.RelationRepository), new(*postgres.RelationRepository)),
+	wire.Bind(new(repository.JobRepository), new(*postgres.JobRepository)),
+	wire.Bind(new(repository.EventRepository), new(*postgres.EventRepository)),
 )
 
 // ProvidePostgresClient 提供 PostgreSQL 客户端
@@ -134,4 +199,14 @@ func ProvideMilvusClient(ctx context.Context, cfg *config.Config) (*milvus.Clien
 		client.Close()
 	}
 	return client, cleanup, nil
+}
+
+// ProvideAuthConfig 提供认证配置
+func ProvideAuthConfig(cfg *config.Config) middleware.AuthConfig {
+	return middleware.AuthConfig{
+		Secret:    cfg.Security.JWT.Secret,
+		Issuer:    cfg.Security.JWT.Issuer,
+		SkipPaths: middleware.DefaultSkipPaths,
+		Enabled:   true,
+	}
 }
