@@ -46,8 +46,10 @@ type GenerationJob struct {
 	TokensComplete int             `json:"tokens_completion,omitempty"`
 	DurationMs     int             `json:"duration_ms,omitempty"`
 	RetryCount     int             `json:"retry_count"`
+	Progress       int             `json:"progress"` // 任务进度 (0-100)
 	IdempotencyKey string          `json:"idempotency_key,omitempty"`
 	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
 	StartedAt      *time.Time      `json:"started_at,omitempty"`
 	CompletedAt    *time.Time      `json:"completed_at,omitempty"`
 }
@@ -115,4 +117,15 @@ func (j *GenerationJob) SetLLMMetrics(provider, model string, promptTokens, comp
 	j.LLMModel = model
 	j.TokensPrompt = promptTokens
 	j.TokensComplete = completionTokens
+}
+
+// UpdateProgress 更新任务进度
+func (j *GenerationJob) UpdateProgress(progress int) {
+	if progress < 0 {
+		progress = 0
+	}
+	if progress > 100 {
+		progress = 100
+	}
+	j.Progress = progress
 }

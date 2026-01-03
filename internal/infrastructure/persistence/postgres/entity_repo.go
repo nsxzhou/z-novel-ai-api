@@ -31,11 +31,12 @@ func (r *EntityRepository) Create(ctx context.Context, storyEntity *entity.Story
 	q := getQuerier(ctx, r.client.db)
 
 	attributesJSON, _ := json.Marshal(storyEntity.Attributes)
+	metadataJSON, _ := json.Marshal(storyEntity.Metadata)
 
 	query := `
-		INSERT INTO entities (id, project_id, name, aliases, type, description, attributes, current_state, 
+		INSERT INTO entities (id, project_id, name, aliases, type, description, attributes, metadata, current_state, 
 			first_appear_chapter_id, last_appear_chapter_id, appear_count, importance, vector_id, created_at, updated_at)
-		VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW())
+		VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())
 		RETURNING id, created_at, updated_at
 	`
 
@@ -52,7 +53,7 @@ func (r *EntityRepository) Create(ctx context.Context, storyEntity *entity.Story
 
 	err := q.QueryRowContext(ctx, query,
 		storyEntity.ProjectID, storyEntity.Name, pq.Array(storyEntity.Aliases), storyEntity.Type,
-		storyEntity.Description, attributesJSON, storyEntity.CurrentState,
+		storyEntity.Description, attributesJSON, metadataJSON, storyEntity.CurrentState,
 		firstAppear, lastAppear, storyEntity.AppearCount, storyEntity.Importance, vectorID,
 	).Scan(&storyEntity.ID, &storyEntity.CreatedAt, &storyEntity.UpdatedAt)
 
@@ -72,7 +73,7 @@ func (r *EntityRepository) GetByID(ctx context.Context, id string) (*entity.Stor
 	q := getQuerier(ctx, r.client.db)
 
 	query := `
-		SELECT id, project_id, name, aliases, type, description, attributes, current_state, 
+		SELECT id, project_id, name, aliases, type, description, attributes, metadata, current_state, 
 			first_appear_chapter_id, last_appear_chapter_id, appear_count, importance, vector_id, created_at, updated_at
 		FROM entities
 		WHERE id = $1
@@ -89,17 +90,18 @@ func (r *EntityRepository) Update(ctx context.Context, storyEntity *entity.Story
 	q := getQuerier(ctx, r.client.db)
 
 	attributesJSON, _ := json.Marshal(storyEntity.Attributes)
+	metadataJSON, _ := json.Marshal(storyEntity.Metadata)
 
 	query := `
 		UPDATE entities
-		SET name = $1, aliases = $2, description = $3, attributes = $4, current_state = $5, importance = $6, updated_at = NOW()
-		WHERE id = $7
+		SET name = $1, aliases = $2, description = $3, attributes = $4, metadata = $5, current_state = $6, importance = $7, updated_at = NOW()
+		WHERE id = $8
 		RETURNING updated_at
 	`
 
 	err := q.QueryRowContext(ctx, query,
 		storyEntity.Name, pq.Array(storyEntity.Aliases), storyEntity.Description,
-		attributesJSON, storyEntity.CurrentState, storyEntity.Importance, storyEntity.ID,
+		attributesJSON, metadataJSON, storyEntity.CurrentState, storyEntity.Importance, storyEntity.ID,
 	).Scan(&storyEntity.UpdatedAt)
 
 	if err != nil {
@@ -168,7 +170,7 @@ func (r *EntityRepository) ListByProject(ctx context.Context, projectID string, 
 
 	// 获取列表
 	query := fmt.Sprintf(`
-		SELECT id, project_id, name, aliases, type, description, attributes, current_state, 
+		SELECT id, project_id, name, aliases, type, description, attributes, metadata, current_state, 
 			first_appear_chapter_id, last_appear_chapter_id, appear_count, importance, vector_id, created_at, updated_at
 		FROM entities
 		WHERE %s
@@ -206,7 +208,7 @@ func (r *EntityRepository) GetByName(ctx context.Context, projectID, name string
 	q := getQuerier(ctx, r.client.db)
 
 	query := `
-		SELECT id, project_id, name, aliases, type, description, attributes, current_state, 
+		SELECT id, project_id, name, aliases, type, description, attributes, metadata, current_state, 
 			first_appear_chapter_id, last_appear_chapter_id, appear_count, importance, vector_id, created_at, updated_at
 		FROM entities
 		WHERE project_id = $1 AND name = $2
@@ -223,7 +225,7 @@ func (r *EntityRepository) SearchByName(ctx context.Context, projectID, queryStr
 	q := getQuerier(ctx, r.client.db)
 
 	query := `
-		SELECT id, project_id, name, aliases, type, description, attributes, current_state, 
+		SELECT id, project_id, name, aliases, type, description, attributes, metadata, current_state, 
 			first_appear_chapter_id, last_appear_chapter_id, appear_count, importance, vector_id, created_at, updated_at
 		FROM entities
 		WHERE project_id = $1 AND (name ILIKE $2 OR $2 = ANY(aliases))
@@ -320,7 +322,7 @@ func (r *EntityRepository) GetByType(ctx context.Context, projectID string, enti
 	q := getQuerier(ctx, r.client.db)
 
 	query := `
-		SELECT id, project_id, name, aliases, type, description, attributes, current_state, 
+		SELECT id, project_id, name, aliases, type, description, attributes, metadata, current_state, 
 			first_appear_chapter_id, last_appear_chapter_id, appear_count, importance, vector_id, created_at, updated_at
 		FROM entities
 		WHERE project_id = $1 AND type = $2
@@ -355,7 +357,7 @@ func (r *EntityRepository) GetProtagonists(ctx context.Context, projectID string
 	q := getQuerier(ctx, r.client.db)
 
 	query := `
-		SELECT id, project_id, name, aliases, type, description, attributes, current_state, 
+		SELECT id, project_id, name, aliases, type, description, attributes, metadata, current_state, 
 			first_appear_chapter_id, last_appear_chapter_id, appear_count, importance, vector_id, created_at, updated_at
 		FROM entities
 		WHERE project_id = $1 AND type = 'character' AND importance = 'protagonist'
@@ -387,10 +389,10 @@ func (r *EntityRepository) scanEntity(row *sql.Row) (*entity.StoryEntity, error)
 	var e entity.StoryEntity
 	var aliases pq.StringArray
 	var firstAppear, lastAppear, vectorID sql.NullString
-	var attributesJSON []byte
+	var attributesJSON, metadataJSON []byte
 
 	err := row.Scan(
-		&e.ID, &e.ProjectID, &e.Name, &aliases, &e.Type, &e.Description, &attributesJSON, &e.CurrentState,
+		&e.ID, &e.ProjectID, &e.Name, &aliases, &e.Type, &e.Description, &attributesJSON, &metadataJSON, &e.CurrentState,
 		&firstAppear, &lastAppear, &e.AppearCount, &e.Importance, &vectorID, &e.CreatedAt, &e.UpdatedAt,
 	)
 
@@ -412,6 +414,7 @@ func (r *EntityRepository) scanEntity(row *sql.Row) (*entity.StoryEntity, error)
 		e.VectorID = vectorID.String
 	}
 	json.Unmarshal(attributesJSON, &e.Attributes)
+	json.Unmarshal(metadataJSON, &e.Metadata)
 
 	return &e, nil
 }
@@ -421,10 +424,10 @@ func (r *EntityRepository) scanEntityFromRows(rows *sql.Rows) (*entity.StoryEnti
 	var e entity.StoryEntity
 	var aliases pq.StringArray
 	var firstAppear, lastAppear, vectorID sql.NullString
-	var attributesJSON []byte
+	var attributesJSON, metadataJSON []byte
 
 	err := rows.Scan(
-		&e.ID, &e.ProjectID, &e.Name, &aliases, &e.Type, &e.Description, &attributesJSON, &e.CurrentState,
+		&e.ID, &e.ProjectID, &e.Name, &aliases, &e.Type, &e.Description, &attributesJSON, &metadataJSON, &e.CurrentState,
 		&firstAppear, &lastAppear, &e.AppearCount, &e.Importance, &vectorID, &e.CreatedAt, &e.UpdatedAt,
 	)
 
@@ -443,6 +446,7 @@ func (r *EntityRepository) scanEntityFromRows(rows *sql.Rows) (*entity.StoryEnti
 		e.VectorID = vectorID.String
 	}
 	json.Unmarshal(attributesJSON, &e.Attributes)
+	json.Unmarshal(metadataJSON, &e.Metadata)
 
 	return &e, nil
 }

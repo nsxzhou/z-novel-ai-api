@@ -45,6 +45,7 @@ type StoryEntity struct {
 	Type                 StoryEntityType   `json:"type"`
 	Description          string            `json:"description,omitempty"`
 	Attributes           *EntityAttributes `json:"attributes,omitempty"`
+	Metadata             map[string]string `json:"metadata,omitempty"` // 扩展属性
 	CurrentState         string            `json:"current_state,omitempty"`
 	FirstAppearChapterID string            `json:"first_appear_chapter_id,omitempty"`
 	LastAppearChapterID  string            `json:"last_appear_chapter_id,omitempty"`
@@ -56,16 +57,21 @@ type StoryEntity struct {
 }
 
 // NewStoryEntity 创建新实体
-func NewStoryEntity(projectID, name string, entityType StoryEntityType) *StoryEntity {
+func NewStoryEntity(projectID, name string, entityType StoryEntityType, importance EntityImportance) *StoryEntity {
 	now := time.Now()
+	imp := importance
+	if imp == "" {
+		imp = ImportanceSecondary
+	}
 	return &StoryEntity{
 		ProjectID:   projectID,
 		Name:        name,
 		Type:        entityType,
 		Aliases:     []string{},
-		Attributes:  &EntityAttributes{},
+		Attributes:  &EntityAttributes{Abilities: []string{}},
+		Metadata:    make(map[string]string),
 		AppearCount: 0,
-		Importance:  ImportanceSecondary,
+		Importance:  imp,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
@@ -83,9 +89,13 @@ func (e *StoryEntity) AddAlias(alias string) {
 }
 
 // UpdateState 更新当前状态
-func (e *StoryEntity) UpdateState(state string) {
+func (e *StoryEntity) UpdateState(state, chapterID string, storyTime int64) {
 	e.CurrentState = state
+	if chapterID != "" {
+		e.LastAppearChapterID = chapterID
+	}
 	e.UpdatedAt = time.Now()
+	// storyTime 可用于记录状态变更的故事时间，当前仅更新 UpdatedAt
 }
 
 // RecordAppearance 记录出场

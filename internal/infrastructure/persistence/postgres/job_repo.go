@@ -31,9 +31,9 @@ func (r *JobRepository) Create(ctx context.Context, job *entity.GenerationJob) e
 	query := `
 		INSERT INTO generation_jobs (id, tenant_id, project_id, chapter_id, job_type, status, priority, 
 			input_params, output_result, error_message, llm_provider, llm_model, tokens_prompt, tokens_completion, 
-			duration_ms, retry_count, idempotency_key, created_at, started_at, completed_at)
-		VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW(), $17, $18)
-		RETURNING id, created_at
+			duration_ms, retry_count, progress, idempotency_key, created_at, updated_at, started_at, completed_at)
+		VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW(), NOW(), $18, $19)
+		RETURNING id, created_at, updated_at
 	`
 
 	var chapterID sql.NullString
@@ -44,9 +44,9 @@ func (r *JobRepository) Create(ctx context.Context, job *entity.GenerationJob) e
 	err := q.QueryRowContext(ctx, query,
 		job.TenantID, job.ProjectID, chapterID, job.JobType, job.Status, job.Priority,
 		job.InputParams, job.OutputResult, job.ErrorMessage, job.LLMProvider, job.LLMModel,
-		job.TokensPrompt, job.TokensComplete, job.DurationMs, job.RetryCount, job.IdempotencyKey,
+		job.TokensPrompt, job.TokensComplete, job.DurationMs, job.RetryCount, job.Progress, job.IdempotencyKey,
 		job.StartedAt, job.CompletedAt,
-	).Scan(&job.ID, &job.CreatedAt)
+	).Scan(&job.ID, &job.CreatedAt, &job.UpdatedAt)
 
 	if err != nil {
 		span.RecordError(err)
@@ -66,7 +66,7 @@ func (r *JobRepository) GetByID(ctx context.Context, id string) (*entity.Generat
 	query := `
 		SELECT id, tenant_id, project_id, chapter_id, job_type, status, priority, 
 			input_params, output_result, error_message, llm_provider, llm_model, tokens_prompt, tokens_completion, 
-			duration_ms, retry_count, idempotency_key, created_at, started_at, completed_at
+			duration_ms, retry_count, progress, idempotency_key, created_at, updated_at, started_at, completed_at
 		FROM generation_jobs
 		WHERE id = $1
 	`
@@ -85,15 +85,16 @@ func (r *JobRepository) Update(ctx context.Context, job *entity.GenerationJob) e
 		UPDATE generation_jobs
 		SET status = $1, output_result = $2, error_message = $3, llm_provider = $4, llm_model = $5, 
 			tokens_prompt = $6, tokens_completion = $7, duration_ms = $8, retry_count = $9, 
-			started_at = $10, completed_at = $11
-		WHERE id = $12
+			progress = $10, started_at = $11, completed_at = $12, updated_at = NOW()
+		WHERE id = $13
+		RETURNING updated_at
 	`
 
-	_, err := q.ExecContext(ctx, query,
+	err := q.QueryRowContext(ctx, query,
 		job.Status, job.OutputResult, job.ErrorMessage, job.LLMProvider, job.LLMModel,
 		job.TokensPrompt, job.TokensComplete, job.DurationMs, job.RetryCount,
-		job.StartedAt, job.CompletedAt, job.ID,
-	)
+		job.Progress, job.StartedAt, job.CompletedAt, job.ID,
+	).Scan(&job.UpdatedAt)
 
 	if err != nil {
 		span.RecordError(err)
@@ -163,7 +164,7 @@ func (r *JobRepository) ListByProject(ctx context.Context, projectID string, fil
 	query := fmt.Sprintf(`
 		SELECT id, tenant_id, project_id, chapter_id, job_type, status, priority, 
 			input_params, output_result, error_message, llm_provider, llm_model, tokens_prompt, tokens_completion, 
-			duration_ms, retry_count, idempotency_key, created_at, started_at, completed_at
+			duration_ms, retry_count, progress, idempotency_key, created_at, updated_at, started_at, completed_at
 		FROM generation_jobs
 		WHERE %s
 		ORDER BY created_at DESC
@@ -202,7 +203,7 @@ func (r *JobRepository) GetByIdempotencyKey(ctx context.Context, key string) (*e
 	query := `
 		SELECT id, tenant_id, project_id, chapter_id, job_type, status, priority, 
 			input_params, output_result, error_message, llm_provider, llm_model, tokens_prompt, tokens_completion, 
-			duration_ms, retry_count, idempotency_key, created_at, started_at, completed_at
+			duration_ms, retry_count, progress, idempotency_key, created_at, updated_at, started_at, completed_at
 		FROM generation_jobs
 		WHERE idempotency_key = $1
 	`
@@ -228,6 +229,48 @@ func (r *JobRepository) UpdateStatus(ctx context.Context, id string, status enti
 	return nil
 }
 
+// MarkRunning 标记任务为运行中（设置 started_at）
+func (r *JobRepository) MarkRunning(ctx context.Context, id string) error {
+	ctx, span := tracer.Start(ctx, "postgres.JobRepository.MarkRunning")
+	defer span.End()
+
+	q := getQuerier(ctx, r.client.db)
+
+	query := `
+		UPDATE generation_jobs
+		SET status = 'running', started_at = NOW(), updated_at = NOW()
+		WHERE id = $1 AND status IN ('pending', 'failed')
+	`
+	_, err := q.ExecContext(ctx, query, id)
+	if err != nil {
+		span.RecordError(err)
+		return fmt.Errorf("failed to mark job running: %w", err)
+	}
+	return nil
+}
+
+// UpdateProgress 更新任务进度（0-100）
+func (r *JobRepository) UpdateProgress(ctx context.Context, id string, progress int) error {
+	ctx, span := tracer.Start(ctx, "postgres.JobRepository.UpdateProgress")
+	defer span.End()
+
+	if progress < 0 {
+		progress = 0
+	}
+	if progress > 100 {
+		progress = 100
+	}
+
+	q := getQuerier(ctx, r.client.db)
+	query := `UPDATE generation_jobs SET progress = $1, updated_at = NOW() WHERE id = $2`
+	_, err := q.ExecContext(ctx, query, progress, id)
+	if err != nil {
+		span.RecordError(err)
+		return fmt.Errorf("failed to update job progress: %w", err)
+	}
+	return nil
+}
+
 // GetPendingJobs 获取待处理任务
 func (r *JobRepository) GetPendingJobs(ctx context.Context, limit int) ([]*entity.GenerationJob, error) {
 	ctx, span := tracer.Start(ctx, "postgres.JobRepository.GetPendingJobs")
@@ -238,7 +281,7 @@ func (r *JobRepository) GetPendingJobs(ctx context.Context, limit int) ([]*entit
 	query := `
 		SELECT id, tenant_id, project_id, chapter_id, job_type, status, priority, 
 			input_params, output_result, error_message, llm_provider, llm_model, tokens_prompt, tokens_completion, 
-			duration_ms, retry_count, idempotency_key, created_at, started_at, completed_at
+			duration_ms, retry_count, progress, idempotency_key, created_at, updated_at, started_at, completed_at
 		FROM generation_jobs
 		WHERE status = 'pending'
 		ORDER BY priority DESC, created_at ASC
@@ -258,7 +301,7 @@ func (r *JobRepository) GetRunningJobs(ctx context.Context) ([]*entity.Generatio
 	query := `
 		SELECT id, tenant_id, project_id, chapter_id, job_type, status, priority, 
 			input_params, output_result, error_message, llm_provider, llm_model, tokens_prompt, tokens_completion, 
-			duration_ms, retry_count, idempotency_key, created_at, started_at, completed_at
+			duration_ms, retry_count, progress, idempotency_key, created_at, updated_at, started_at, completed_at
 		FROM generation_jobs
 		WHERE status = 'running'
 		ORDER BY started_at ASC
@@ -277,7 +320,7 @@ func (r *JobRepository) GetFailedJobs(ctx context.Context, maxRetries int, limit
 	query := `
 		SELECT id, tenant_id, project_id, chapter_id, job_type, status, priority, 
 			input_params, output_result, error_message, llm_provider, llm_model, tokens_prompt, tokens_completion, 
-			duration_ms, retry_count, idempotency_key, created_at, started_at, completed_at
+			duration_ms, retry_count, progress, idempotency_key, created_at, updated_at, started_at, completed_at
 		FROM generation_jobs
 		WHERE status = 'failed' AND retry_count < $1
 		ORDER BY created_at ASC
@@ -397,8 +440,8 @@ func (r *JobRepository) scanJob(row *sql.Row) (*entity.GenerationJob, error) {
 	err := row.Scan(
 		&job.ID, &job.TenantID, &job.ProjectID, &chapterID, &job.JobType, &job.Status, &job.Priority,
 		&inputParams, &outputResult, &job.ErrorMessage, &job.LLMProvider, &job.LLMModel,
-		&job.TokensPrompt, &job.TokensComplete, &job.DurationMs, &job.RetryCount, &idempotencyKey,
-		&job.CreatedAt, &startedAt, &completedAt,
+		&job.TokensPrompt, &job.TokensComplete, &job.DurationMs, &job.RetryCount, &job.Progress, &idempotencyKey,
+		&job.CreatedAt, &job.UpdatedAt, &startedAt, &completedAt,
 	)
 
 	if err != nil {
@@ -436,8 +479,8 @@ func (r *JobRepository) scanJobFromRows(rows *sql.Rows) (*entity.GenerationJob, 
 	err := rows.Scan(
 		&job.ID, &job.TenantID, &job.ProjectID, &chapterID, &job.JobType, &job.Status, &job.Priority,
 		&inputParams, &outputResult, &job.ErrorMessage, &job.LLMProvider, &job.LLMModel,
-		&job.TokensPrompt, &job.TokensComplete, &job.DurationMs, &job.RetryCount, &idempotencyKey,
-		&job.CreatedAt, &startedAt, &completedAt,
+		&job.TokensPrompt, &job.TokensComplete, &job.DurationMs, &job.RetryCount, &job.Progress, &idempotencyKey,
+		&job.CreatedAt, &job.UpdatedAt, &startedAt, &completedAt,
 	)
 
 	if err != nil {
