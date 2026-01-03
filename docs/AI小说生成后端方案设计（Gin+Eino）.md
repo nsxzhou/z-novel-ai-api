@@ -10,7 +10,7 @@
   - 三信号检索（语义向量 + 关键词 TF‑IDF + 时间对齐）
   - 四维一致性校验（设定/角色/状态/情感）
   - 记忆回写（摘要与状态抽取，时间知识图谱）
-- 关键架构决策：分层微服务 + Gin API 网关 + Eino 编排工作流 + 混合 RAG 检索；数据层 PostgreSQL + Redis + VectorDB（Milvus/PGVector）+ S3。
+- 关键架构决策：分层微服务 + Gin API 网关 + Eino 编排工作流 + 混合 RAG 检索；数据层 PostgreSQL + Redis + VectorDB（Milvus/PGVector）+ R2。
 - 非功能 SLO：SLA ≥ 99.9%；生成首字延迟 TTFT < 2s；检索接口 P99 < 300ms；支持 100+ 并发租户隔离。
 - 上线范围：后端 API、工作流、存储与检索、异步任务与可观测性；不包含前端 UI、计费与版权模块。
 
@@ -44,7 +44,7 @@
 
 ### 3.1 分层结构
 
-Ingress（Nginx/ALB） → Gin API Gateway（Auth/RateLimit/Audit/Trace） → 领域服务（StoryGen/Retrieval/Validator/Memory/JobWorker） → Eino 编排层（PromptFlow/Chain/Graph） → 数据层（PostgreSQL/Redis/VectorDB/S3） → 侧翼：可观测与安全（Prometheus/Grafana/Jaeger/Vault）。
+Ingress（Nginx/ALB） → Gin API Gateway（Auth/RateLimit/Audit/Trace） → 领域服务（StoryGen/Retrieval/Validator/Memory/JobWorker） → Eino 编排层（PromptFlow/Chain/Graph） → 数据层（PostgreSQL/Redis/VectorDB/R2） → 侧翼：可观测与安全（Prometheus/Grafana/Jaeger/Vault）。
 
 ### 3.2 关键数据流（DF‑1 ~ DF‑8）
 
@@ -53,7 +53,7 @@ Ingress（Nginx/ALB） → Gin API Gateway（Auth/RateLimit/Audit/Trace） → �
 - DF‑3 一致性校验反馈流：ValidatorSvc → LLM(Audit) → Pass/Fail → StoryGenSvc（Retry Loop）。
 - DF‑4 摘要与状态回写流：StoryGenSvc → Redis Stream → JobWorker → MemorySvc → DB/Milvus（Update State）。
 - DF‑5 向量索引写入/重建：MemorySvc → Text Splitter → Embedding → Milvus Insert。
-- DF‑6 审计日志归档：Gateway Middleware → Kafka/Log Queue → ClickHouse/S3。
+- DF‑6 审计日志归档：Gateway Middleware → Kafka/Log Queue → ClickHouse/R2。
 - DF‑7 指标采集与 Dashboard：Services(Prom SDK) → Scraper → Prometheus/Grafana。
 - DF‑8 秘钥读取与轮转：Service Startup → Vault Agent → Env Injection → App Config。
 
@@ -69,7 +69,7 @@ Ingress（Nginx/ALB） → Gin API Gateway（Auth/RateLimit/Audit/Trace） → �
 | validator-svc     | 一致性与敏感性校验；给出修改建议       | RuleEngine、LLMAuditor、Filter             | LLM；失败默认 Pass（可配置）          |
 | memory-svc        | 实体/事件/关系管理；摘要回写；短期会话 | EntityMgr、EventMgr、RelationGraph         | PostgreSQL、Redis Cache               |
 | job-worker        | 异步任务执行；批量 Embedding、索引再建 | TaskDispatcher、Handlers、RetryQueue       | Redis Streams；指数退避，DLQ          |
-| file-svc          | 封面/插图/导出管理；CDN 签名           | UploadHandler、CDNSigner                   | S3/MinIO                              |
+| file-svc          | 封面/插图/导出管理；CDN 签名           | UploadHandler、CDNSigner                   | R2/MinIO                              |
 | admin-svc         | 租户管理、配置热更、看板与运行参数     | TenantMgr、ConfigMgr、DashboardAPI         | PostgreSQL                            |
 
 并发模型：所有服务实现 Context 超时取消；JobWorker 采用 Worker Pool + 消费者组；StoryGen 支持 SSE 流式发送。
