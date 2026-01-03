@@ -37,6 +37,12 @@ type JobRepository interface {
 	// UpdateStatus 更新任务状态
 	UpdateStatus(ctx context.Context, id string, status entity.JobStatus) error
 
+	// MarkRunning 标记任务为运行中（设置 started_at）
+	MarkRunning(ctx context.Context, id string) error
+
+	// UpdateProgress 更新任务进度（0-100）
+	UpdateProgress(ctx context.Context, id string, progress int) error
+
 	// GetPendingJobs 获取待处理任务
 	GetPendingJobs(ctx context.Context, limit int) ([]*entity.GenerationJob, error)
 
