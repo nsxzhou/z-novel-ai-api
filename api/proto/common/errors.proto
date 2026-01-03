@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package z_novel_ai.common.v1;
+
+option go_package = "z-novel-ai-api/api/proto/common;common";
+
+// ErrorCode 错误码枚举
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  
+  // 通用错误 (1000-1999)
+  ERROR_CODE_INVALID_PARAM = 1001;
+  ERROR_CODE_UNAUTHORIZED = 1002;
+  ERROR_CODE_FORBIDDEN = 1003;
+  ERROR_CODE_NOT_FOUND = 1004;
+  ERROR_CODE_CONFLICT = 1005;
+  ERROR_CODE_INTERNAL = 1006;
+  ERROR_CODE_SERVICE_UNAVAILABLE = 1007;
+  
+  // 业务错误 (2000-2999)
+  ERROR_CODE_GENERATION_FAILED = 2001;
+  ERROR_CODE_VALIDATION_FAILED = 2002;
+  ERROR_CODE_RETRIEVAL_FAILED = 2003;
+  ERROR_CODE_EMBEDDING_FAILED = 2004;
+  ERROR_CODE_LLM_RATE_LIMITED = 2005;
+  
+  // 资源错误 (3000-3999)
+  ERROR_CODE_PROJECT_NOT_FOUND = 3001;
+  ERROR_CODE_CHAPTER_NOT_FOUND = 3002;
+  ERROR_CODE_ENTITY_NOT_FOUND = 3003;
+  ERROR_CODE_JOB_NOT_FOUND = 3004;
+}
+
+// ErrorDetail 错误详情
+message ErrorDetail {
+  ErrorCode code = 1;
+  string message = 2;
+  string domain = 3;
+  map<string, string> metadata = 4;
+}

@@ -1,0 +1,78 @@
+syntax = "proto3";
+
+package z_novel_ai.story.v1;
+
+option go_package = "z-novel-ai-api/api/proto/story;story";
+
+import "common/common.proto";
+
+// StoryGenService 小说生成服务
+service StoryGenService {
+  // GenerateChapter 生成章节
+  rpc GenerateChapter(GenerateChapterRequest) returns (GenerateChapterResponse);
+  
+  // StreamGenerateChapter 流式生成章节
+  rpc StreamGenerateChapter(GenerateChapterRequest) returns (stream GenerateChapterChunk);
+  
+  // GenerateSummary 生成摘要
+  rpc GenerateSummary(GenerateSummaryRequest) returns (GenerateSummaryResponse);
+}
+
+// GenerateChapterRequest 生成章节请求
+message GenerateChapterRequest {
+  z_novel_ai.common.v1.TenantContext context = 1;
+  string project_id = 2;
+  string chapter_id = 3;
+  string outline = 4;
+  int32 target_word_count = 5;
+  GenerationOptions options = 6;
+}
+
+// GenerationOptions 生成选项
+message GenerationOptions {
+  string model = 1;
+  double temperature = 2;
+  bool skip_validation = 3;
+  int32 max_retries = 4;
+}
+
+// GenerateChapterResponse 生成章节响应
+message GenerateChapterResponse {
+  string chapter_id = 1;
+  string content = 2;
+  int32 word_count = 3;
+  GenerationMetadata metadata = 4;
+}
+
+// GenerateChapterChunk 生成章节片段
+message GenerateChapterChunk {
+  oneof payload {
+    string content_chunk = 1;
+    GenerationMetadata metadata = 2;
+    string error = 3;
+  }
+}
+
+// GenerationMetadata 生成元数据
+message GenerationMetadata {
+  string model = 1;
+  string provider = 2;
+  int32 prompt_tokens = 3;
+  int32 completion_tokens = 4;
+  double temperature = 5;
+  int64 generated_at = 6;
+}
+
+// GenerateSummaryRequest 生成摘要请求
+message GenerateSummaryRequest {
+  z_novel_ai.common.v1.TenantContext context = 1;
+  string project_id = 2;
+  string content = 3;
+  int32 max_length = 4;
+}
+
+// GenerateSummaryResponse 生成摘要响应
+message GenerateSummaryResponse {
+  string summary = 1;
+  int32 tokens_used = 2;
+}

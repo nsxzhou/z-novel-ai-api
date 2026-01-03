@@ -1,0 +1,87 @@
+syntax = "proto3";
+
+package z_novel_ai.memory.v1;
+
+option go_package = "z-novel-ai-api/api/proto/memory;memory";
+
+import "common/common.proto";
+
+// MemoryService 记忆服务
+service MemoryService {
+  // StoreMemory 存储记忆
+  rpc StoreMemory(StoreMemoryRequest) returns (StoreMemoryResponse);
+  
+  // GetMemory 获取记忆
+  rpc GetMemory(GetMemoryRequest) returns (GetMemoryResponse);
+  
+  // UpdateEntityState 更新实体状态
+  rpc UpdateEntityState(UpdateEntityStateRequest) returns (UpdateEntityStateResponse);
+}
+
+// StoreMemoryRequest 存储记忆请求
+message StoreMemoryRequest {
+  z_novel_ai.common.v1.TenantContext context = 1;
+  string project_id = 2;
+  string chapter_id = 3;
+  string content = 4;
+  int64 story_time = 5;
+  repeated EntityMention mentions = 6;
+}
+
+// EntityMention 实体提及
+message EntityMention {
+  string entity_id = 1;
+  string entity_name = 2;
+  string context = 3;
+  string state_change = 4;
+}
+
+// StoreMemoryResponse 存储记忆响应
+message StoreMemoryResponse {
+  string memory_id = 1;
+  bool success = 2;
+}
+
+// GetMemoryRequest 获取记忆请求
+message GetMemoryRequest {
+  z_novel_ai.common.v1.TenantContext context = 1;
+  string project_id = 2;
+  repeated string entity_ids = 3;
+  int64 story_time = 4;
+}
+
+// GetMemoryResponse 获取记忆响应
+message GetMemoryResponse {
+  repeated EntityMemory entities = 1;
+}
+
+// EntityMemory 实体记忆
+message EntityMemory {
+  string entity_id = 1;
+  string entity_name = 2;
+  string current_state = 3;
+  repeated StateHistory history = 4;
+}
+
+// StateHistory 状态历史
+message StateHistory {
+  string state = 1;
+  string chapter_id = 2;
+  int64 story_time = 3;
+}
+
+// UpdateEntityStateRequest 更新实体状态请求
+message UpdateEntityStateRequest {
+  z_novel_ai.common.v1.TenantContext context = 1;
+  string project_id = 2;
+  string entity_id = 3;
+  string new_state = 4;
+  string chapter_id = 5;
+  int64 story_time = 6;
+}
+
+// UpdateEntityStateResponse 更新实体状态响应
+message UpdateEntityStateResponse {
+  bool success = 1;
+  string previous_state = 2;
+}

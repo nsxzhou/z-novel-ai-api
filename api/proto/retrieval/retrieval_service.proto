@@ -1,0 +1,101 @@
+syntax = "proto3";
+
+package z_novel_ai.retrieval.v1;
+
+option go_package = "z-novel-ai-api/api/proto/retrieval;retrieval";
+
+import "common/common.proto";
+
+// RetrievalService 检索服务
+service RetrievalService {
+  // Search 检索上下文
+  rpc Search(SearchRequest) returns (SearchResponse);
+  
+  // DebugSearch 调试检索
+  rpc DebugSearch(DebugSearchRequest) returns (DebugSearchResponse);
+  
+  // IndexDocument 索引文档
+  rpc IndexDocument(IndexDocumentRequest) returns (IndexDocumentResponse);
+}
+
+// SearchRequest 检索请求
+message SearchRequest {
+  z_novel_ai.common.v1.TenantContext context = 1;
+  string project_id = 2;
+  string query = 3;
+  int64 current_story_time = 4;
+  int32 top_k = 5;
+  RetrievalOptions options = 6;
+}
+
+// RetrievalOptions 检索选项
+message RetrievalOptions {
+  double vector_weight = 1;
+  double keyword_weight = 2;
+  bool include_entities = 3;
+  bool include_events = 4;
+  repeated string entity_types = 5;
+}
+
+// SearchResponse 检索响应
+message SearchResponse {
+  repeated ContextSegment segments = 1;
+  repeated z_novel_ai.common.v1.EntityRef entities = 2;
+  RetrievalMetadata metadata = 3;
+}
+
+// ContextSegment 上下文片段
+message ContextSegment {
+  string id = 1;
+  string text = 2;
+  string chapter_id = 3;
+  int64 story_time = 4;
+  double score = 5;
+  string source = 6;
+}
+
+// RetrievalMetadata 检索元数据
+message RetrievalMetadata {
+  int32 total_segments = 1;
+  int32 total_entities = 2;
+  int64 retrieval_duration_ms = 3;
+}
+
+// DebugSearchRequest 调试检索请求
+message DebugSearchRequest {
+  SearchRequest request = 1;
+  bool include_scores = 2;
+  bool include_embedding = 3;
+}
+
+// DebugSearchResponse 调试检索响应
+message DebugSearchResponse {
+  SearchResponse response = 1;
+  repeated float query_embedding = 2;
+  DebugInfo debug_info = 3;
+}
+
+// DebugInfo 调试信息
+message DebugInfo {
+  int64 vector_search_time_ms = 1;
+  int64 keyword_search_time_ms = 2;
+  int64 fusion_time_ms = 3;
+  int32 total_candidates = 4;
+  int32 filtered_candidates = 5;
+}
+
+// IndexDocumentRequest 索引文档请求
+message IndexDocumentRequest {
+  z_novel_ai.common.v1.TenantContext context = 1;
+  string project_id = 2;
+  string document_id = 3;
+  string content = 4;
+  string document_type = 5;
+  map<string, string> metadata = 6;
+}
+
+// IndexDocumentResponse 索引文档响应
+message IndexDocumentResponse {
+  string vector_id = 1;
+  bool success = 2;
+}

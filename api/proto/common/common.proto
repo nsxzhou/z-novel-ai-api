@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package z_novel_ai.common.v1;
+
+option go_package = "z-novel-ai-api/api/proto/common;common";
+
+// PageRequest 分页请求
+message PageRequest {
+  int32 page = 1;
+  int32 page_size = 2;
+}
+
+// PageResponse 分页响应
+message PageResponse {
+  int32 page = 1;
+  int32 page_size = 2;
+  int64 total = 3;
+  int32 total_pages = 4;
+}
+
+// TenantContext 租户上下文
+message TenantContext {
+  string tenant_id = 1;
+  string user_id = 2;
+  string trace_id = 3;
+}
+
+// EntityRef 实体引用
+message EntityRef {
+  string id = 1;
+  string type = 2;
+  string name = 3;
+}
+
+// TimeRange 时间范围
+message TimeRange {
+  int64 start_time = 1;
+  int64 end_time = 2;
+}
+
+// Empty 空消息
+message Empty {}

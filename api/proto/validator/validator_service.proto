@@ -1,0 +1,71 @@
+syntax = "proto3";
+
+package z_novel_ai.validator.v1;
+
+option go_package = "z-novel-ai-api/api/proto/validator;validator";
+
+import "common/common.proto";
+
+// ValidatorService 验证服务
+service ValidatorService {
+  // ValidateChapter 验证章节
+  rpc ValidateChapter(ValidateChapterRequest) returns (ValidateChapterResponse);
+  
+  // ValidateConsistency 验证一致性
+  rpc ValidateConsistency(ValidateConsistencyRequest) returns (ValidateConsistencyResponse);
+}
+
+// ValidateChapterRequest 验证章节请求
+message ValidateChapterRequest {
+  z_novel_ai.common.v1.TenantContext context = 1;
+  string project_id = 2;
+  string chapter_id = 3;
+  string content = 4;
+  ValidationOptions options = 5;
+}
+
+// ValidationOptions 验证选项
+message ValidationOptions {
+  bool check_entities = 1;
+  bool check_timeline = 2;
+  bool check_style = 3;
+  bool auto_fix = 4;
+}
+
+// ValidateChapterResponse 验证章节响应
+message ValidateChapterResponse {
+  bool valid = 1;
+  repeated ValidationIssue issues = 2;
+  string fixed_content = 3;
+}
+
+// ValidationIssue 验证问题
+message ValidationIssue {
+  string type = 1;
+  string severity = 2;
+  string message = 3;
+  string location = 4;
+  string suggestion = 5;
+}
+
+// ValidateConsistencyRequest 验证一致性请求
+message ValidateConsistencyRequest {
+  z_novel_ai.common.v1.TenantContext context = 1;
+  string project_id = 2;
+  repeated string chapter_ids = 3;
+}
+
+// ValidateConsistencyResponse 验证一致性响应
+message ValidateConsistencyResponse {
+  bool consistent = 1;
+  repeated ConsistencyIssue issues = 2;
+}
+
+// ConsistencyIssue 一致性问题
+message ConsistencyIssue {
+  string entity_id = 1;
+  string entity_name = 2;
+  string issue_type = 3;
+  string description = 4;
+  repeated string affected_chapters = 5;
+}
