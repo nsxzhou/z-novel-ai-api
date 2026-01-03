@@ -124,9 +124,16 @@ func setDefaults(v *viper.Viper) {
 
 	// gRPC 服务器默认值
 	v.SetDefault("server.grpc.host", "0.0.0.0")
-	v.SetDefault("server.grpc.port", 9090)
+	v.SetDefault("server.grpc.port", 50051)
 	v.SetDefault("server.grpc.max_recv_msg_size", 16777216)
 	v.SetDefault("server.grpc.max_send_msg_size", 16777216)
+
+	// gRPC 客户端默认值
+	v.SetDefault("clients.grpc.dial_timeout", "3s")
+	v.SetDefault("clients.grpc.retrieval_service_addr", "localhost:50052")
+	v.SetDefault("clients.grpc.story_gen_service_addr", "localhost:50053")
+	v.SetDefault("clients.grpc.memory_service_addr", "localhost:50054")
+	v.SetDefault("clients.grpc.validator_service_addr", "localhost:50055")
 
 	// 数据库默认值
 	v.SetDefault("database.postgres.host", "localhost")
@@ -167,7 +174,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("observability.tracing.endpoint", "localhost:4317")
 	v.SetDefault("observability.tracing.sample_rate", 1.0)
 	v.SetDefault("observability.metrics.enabled", true)
-	v.SetDefault("observability.metrics.port", 9091)
+	v.SetDefault("observability.metrics.port", 9464)
 	v.SetDefault("observability.metrics.path", "/metrics")
 
 	// 安全默认值

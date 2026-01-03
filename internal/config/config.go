@@ -9,6 +9,7 @@ import (
 type Config struct {
 	App           AppConfig           `yaml:"app" mapstructure:"app"`
 	Server        ServerConfig        `yaml:"server" mapstructure:"server"`
+	Clients       ClientsConfig       `yaml:"clients" mapstructure:"clients"`
 	Database      DatabaseConfig      `yaml:"database" mapstructure:"database"`
 	Cache         CacheConfig         `yaml:"cache" mapstructure:"cache"`
 	Vector        VectorConfig        `yaml:"vector" mapstructure:"vector"`
@@ -32,6 +33,26 @@ type AppConfig struct {
 type ServerConfig struct {
 	HTTP HTTPServerConfig `yaml:"http" mapstructure:"http"`
 	GRPC GRPCServerConfig `yaml:"grpc" mapstructure:"grpc"`
+}
+
+// ClientsConfig 外部/内部依赖客户端配置
+type ClientsConfig struct {
+	GRPC GRPCClientsConfig `yaml:"grpc" mapstructure:"grpc"`
+}
+
+// GRPCClientsConfig 内部 gRPC 客户端配置
+type GRPCClientsConfig struct {
+	// DialTimeout 拨号超时
+	DialTimeout time.Duration `yaml:"dial_timeout" mapstructure:"dial_timeout"`
+
+	// RetrievalServiceAddr 检索服务地址 (host:port)
+	RetrievalServiceAddr string `yaml:"retrieval_service_addr" mapstructure:"retrieval_service_addr"`
+	// StoryGenServiceAddr 小说生成服务地址 (host:port)
+	StoryGenServiceAddr string `yaml:"story_gen_service_addr" mapstructure:"story_gen_service_addr"`
+	// MemoryServiceAddr 记忆服务地址 (host:port)
+	MemoryServiceAddr string `yaml:"memory_service_addr" mapstructure:"memory_service_addr"`
+	// ValidatorServiceAddr 校验服务地址 (host:port)
+	ValidatorServiceAddr string `yaml:"validator_service_addr" mapstructure:"validator_service_addr"`
 }
 
 // HTTPServerConfig HTTP 服务器配置
@@ -109,17 +130,16 @@ type MilvusConfig struct {
 
 // StorageConfig 对象存储配置
 type StorageConfig struct {
-	S3 S3Config `yaml:"s3" mapstructure:"s3"`
+	R2 R2Config `yaml:"r2" mapstructure:"r2"`
 }
 
-// S3Config S3/MinIO 配置
-type S3Config struct {
-	Endpoint  string `yaml:"endpoint" mapstructure:"endpoint"`
-	Region    string `yaml:"region" mapstructure:"region"`
-	AccessKey string `yaml:"access_key" mapstructure:"access_key"`
-	SecretKey string `yaml:"secret_key" mapstructure:"secret_key"`
-	Bucket    string `yaml:"bucket" mapstructure:"bucket"`
-	UseSSL    bool   `yaml:"use_ssl" mapstructure:"use_ssl"`
+// R2Config Cloudflare R2 配置
+type R2Config struct {
+	AccountID       string `yaml:"account_id" mapstructure:"account_id"`
+	AccessKeyID     string `yaml:"access_key_id" mapstructure:"access_key_id"`
+	SecretAccessKey string `yaml:"secret_access_key" mapstructure:"secret_access_key"`
+	Bucket          string `yaml:"bucket" mapstructure:"bucket"`
+	PublicURL       string `yaml:"public_url" mapstructure:"public_url"`
 }
 
 // LLMConfig LLM 配置

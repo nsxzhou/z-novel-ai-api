@@ -9,15 +9,23 @@ app:
 server:
   http:
     host: "0.0.0.0"
-    port: 8080
+    port: ${HTTP_PORT:8080}
     read_timeout: 30s
     write_timeout: 60s
     idle_timeout: 120s
   grpc:
     host: "0.0.0.0"
-    port: 9090
+    port: ${GRPC_PORT:50051}
     max_recv_msg_size: 16777216 # 16MB
     max_send_msg_size: 16777216
+
+clients:
+  grpc:
+    dial_timeout: 3s
+    retrieval_service_addr: "${RETRIEVAL_GRPC_ADDR:localhost:50052}"
+    story_gen_service_addr: "${STORY_GEN_GRPC_ADDR:localhost:50053}"
+    memory_service_addr: "${MEMORY_GRPC_ADDR:localhost:50054}"
+    validator_service_addr: "${VALIDATOR_GRPC_ADDR:localhost:50055}"
 
 database:
   postgres:
@@ -57,13 +65,12 @@ vector:
     hnsw_ef_construction: 200
 
 storage:
-  s3:
-    endpoint: "${S3_ENDPOINT:localhost:9000}"
-    region: "${S3_REGION:us-east-1}"
-    access_key: "${S3_ACCESS_KEY}" # 通过 Vault 注入
-    secret_key: "${S3_SECRET_KEY}" # 通过 Vault 注入
-    bucket: "${S3_BUCKET:z-novel-ai}"
-    use_ssl: false
+  r2:
+    account_id: "${STORAGE_R2_ACCOUNT_ID:4faec3c14a0eb6dff1f8ae588218e1ee}"
+    access_key_id: "${STORAGE_R2_ACCESS_KEY_ID}"
+    secret_access_key: "${STORAGE_R2_SECRET_ACCESS_KEY}"
+    bucket: "${STORAGE_R2_BUCKET:novel}"
+    public_url: "${STORAGE_R2_PUBLIC_URL:https://pub-f5969c4787c14d70a203a5a8264bb457.r2.dev}"
 
 llm:
   default_provider: "openai"
@@ -117,7 +124,7 @@ observability:
     sample_rate: 1.0
   metrics:
     enabled: true
-    port: 9091
+    port: ${METRICS_PORT:9464}
     path: "/metrics"
 
 security:
