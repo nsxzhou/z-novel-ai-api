@@ -45,3 +45,5 @@ tmp/
 
 # Protobuf 生成
 *.pb.go
+.ace-tool/
+.cache

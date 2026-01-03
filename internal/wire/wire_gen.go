@@ -84,12 +84,14 @@ func InitializeDataLayer(ctx context.Context, cfg *config.Config) (*DataLayer, f
 // InitializeApp 初始化整个应用（带路由器）
 func InitializeApp(ctx context.Context, cfg *config.Config) (*router.Router, func(), error) {
 	authConfig := ProvideAuthConfig(cfg)
-	authHandler := handler.NewAuthHandler(authConfig)
-	healthHandler := handler.NewHealthHandler()
 	client, cleanup, err := ProvidePostgresClient(cfg)
 	if err != nil {
 		return nil, nil, err
 	}
+	userRepository := postgres.NewUserRepository(client)
+	tenantRepository := postgres.NewTenantRepository(client)
+	authHandler := handler.NewAuthHandler(authConfig, userRepository, tenantRepository)
+	healthHandler := handler.NewHealthHandler()
 	projectRepository := postgres.NewProjectRepository(client)
 	projectHandler := handler.NewProjectHandler(projectRepository)
 	volumeRepository := postgres.NewVolumeRepository(client)
@@ -126,12 +128,11 @@ func InitializeApp(ctx context.Context, cfg *config.Config) (*router.Router, fun
 	}
 	storyGenServiceClient := ProvideStoryGenGRPCClient(storyGenGRPCConn)
 	streamHandler := handler.NewStreamHandler(chapterRepository, txManager, tenantContext, storyGenServiceClient)
-	userRepository := postgres.NewUserRepository(client)
 	userHandler := handler.NewUserHandler(userRepository)
-	tenantRepository := postgres.NewTenantRepository(client)
 	tenantHandler := handler.NewTenantHandler(tenantRepository)
 	eventRepository := postgres.NewEventRepository(client)
 	eventHandler := handler.NewEventHandler(eventRepository)
+	relationHandler := handler.NewRelationHandler(relationRepository)
 	rateLimiter := redis.NewRateLimiter(redisClient)
 	routerHandlers := &router.RouterHandlers{
 		Auth:         authHandler,
@@ -146,6 +147,7 @@ func InitializeApp(ctx context.Context, cfg *config.Config) (*router.Router, fun
 		User:         userHandler,
 		Tenant:       tenantHandler,
 		Event:        eventHandler,
+		Relation:     relationHandler,
 		RateLimiter:  rateLimiter,
 		Transactor:   txManager,
 		TenantCtxMgr: tenantContext,
@@ -210,7 +212,7 @@ var MilvusSet = wire.NewSet(
 	ProvideMilvusClient, milvus.NewRepository,
 )
 
-// GRPCClientsSet gRPC 客户端提供者集合（API Gateway 使用）
+// GRPCClientsSet gRPC 客户端提供者集合
 var GRPCClientsSet = wire.NewSet(
 	ProvideRetrievalGRPCConn,
 	ProvideRetrievalGRPCClient,
@@ -224,7 +226,7 @@ var GRPCClientsSet = wire.NewSet(
 
 // RouterSet 路由器提供者集合
 var RouterSet = wire.NewSet(
-	ProvideAuthConfig, handler.NewAuthHandler, handler.NewHealthHandler, handler.NewProjectHandler, handler.NewVolumeHandler, handler.NewChapterHandler, handler.NewEntityHandler, handler.NewJobHandler, handler.NewRetrievalHandler, handler.NewStreamHandler, handler.NewUserHandler, handler.NewTenantHandler, handler.NewEventHandler, wire.Struct(new(router.RouterHandlers), "*"), router.NewWithDeps,
+	ProvideAuthConfig, handler.NewAuthHandler, handler.NewHealthHandler, handler.NewProjectHandler, handler.NewVolumeHandler, handler.NewChapterHandler, handler.NewEntityHandler, handler.NewJobHandler, handler.NewRetrievalHandler, handler.NewStreamHandler, handler.NewUserHandler, handler.NewTenantHandler, handler.NewEventHandler, handler.NewRelationHandler, wire.Struct(new(router.RouterHandlers), "*"), router.NewWithDeps,
 )
 
 // RepoSet 整合了具体实现与接口绑定的集合

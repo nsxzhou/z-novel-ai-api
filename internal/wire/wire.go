@@ -135,6 +135,7 @@ var RouterSet = wire.NewSet(
 	handler.NewUserHandler,
 	handler.NewTenantHandler,
 	handler.NewEventHandler,
+	handler.NewRelationHandler,
 	wire.Struct(new(router.RouterHandlers), "*"),
 	router.NewWithDeps,
 )

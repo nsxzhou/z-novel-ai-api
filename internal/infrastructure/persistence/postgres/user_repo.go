@@ -31,12 +31,12 @@ func (r *UserRepository) Create(ctx context.Context, user *entity.User) error {
 	settingsJSON, _ := json.Marshal(user.Settings)
 
 	query := `
-		INSERT INTO users (id, tenant_id, external_id, email, name, avatar_url, role, settings, last_login_at, created_at, updated_at)
-		VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+		INSERT INTO users (id, tenant_id, external_id, email, password_hash, name, avatar_url, role, settings, last_login_at, created_at, updated_at)
+		VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
 		RETURNING id, created_at, updated_at
 	`
 
-	var externalID, avatarURL sql.NullString
+	var externalID, avatarURL, passwordHash sql.NullString
 	var lastLoginAt sql.NullTime
 
 	if user.ExternalID != "" {
@@ -45,12 +45,15 @@ func (r *UserRepository) Create(ctx context.Context, user *entity.User) error {
 	if user.AvatarURL != "" {
 		avatarURL = sql.NullString{String: user.AvatarURL, Valid: true}
 	}
+	if user.PasswordHash != "" {
+		passwordHash = sql.NullString{String: user.PasswordHash, Valid: true}
+	}
 	if user.LastLoginAt != nil {
 		lastLoginAt = sql.NullTime{Time: *user.LastLoginAt, Valid: true}
 	}
 
 	err := q.QueryRowContext(ctx, query,
-		user.TenantID, externalID, user.Email, user.Name, avatarURL, user.Role, settingsJSON, lastLoginAt,
+		user.TenantID, externalID, user.Email, passwordHash, user.Name, avatarURL, user.Role, settingsJSON, lastLoginAt,
 	).Scan(&user.ID, &user.CreatedAt, &user.UpdatedAt)
 
 	if err != nil {
@@ -69,7 +72,7 @@ func (r *UserRepository) GetByID(ctx context.Context, id string) (*entity.User, 
 	q := getQuerier(ctx, r.client.db)
 
 	query := `
-		SELECT id, tenant_id, external_id, email, name, avatar_url, role, settings, last_login_at, created_at, updated_at
+		SELECT id, tenant_id, external_id, email, password_hash, name, avatar_url, role, settings, last_login_at, created_at, updated_at
 		FROM users
 		WHERE id = $1
 	`
@@ -85,7 +88,7 @@ func (r *UserRepository) GetByEmail(ctx context.Context, tenantID, email string)
 	q := getQuerier(ctx, r.client.db)
 
 	query := `
-		SELECT id, tenant_id, external_id, email, name, avatar_url, role, settings, last_login_at, created_at, updated_at
+		SELECT id, tenant_id, external_id, email, password_hash, name, avatar_url, role, settings, last_login_at, created_at, updated_at
 		FROM users
 		WHERE tenant_id = $1 AND email = $2
 	`
@@ -257,12 +260,12 @@ func (r *UserRepository) ExistsByEmail(ctx context.Context, tenantID, email stri
 // scanUser 扫描单行用户数据
 func (r *UserRepository) scanUser(row *sql.Row) (*entity.User, error) {
 	var user entity.User
-	var externalID, avatarURL sql.NullString
+	var externalID, avatarURL, passwordHash sql.NullString
 	var lastLoginAt sql.NullTime
 	var settingsJSON []byte
 
 	err := row.Scan(
-		&user.ID, &user.TenantID, &externalID, &user.Email, &user.Name,
+		&user.ID, &user.TenantID, &externalID, &user.Email, &passwordHash, &user.Name,
 		&avatarURL, &user.Role, &settingsJSON, &lastLoginAt,
 		&user.CreatedAt, &user.UpdatedAt,
 	)
@@ -280,6 +283,9 @@ func (r *UserRepository) scanUser(row *sql.Row) (*entity.User, error) {
 	if avatarURL.Valid {
 		user.AvatarURL = avatarURL.String
 	}
+	if passwordHash.Valid {
+		user.PasswordHash = passwordHash.String
+	}
 	if lastLoginAt.Valid {
 		user.LastLoginAt = &lastLoginAt.Time
 	}
@@ -291,12 +297,12 @@ func (r *UserRepository) scanUser(row *sql.Row) (*entity.User, error) {
 // scanUserFromRows 从多行结果扫描
 func (r *UserRepository) scanUserFromRows(rows *sql.Rows) (*entity.User, error) {
 	var user entity.User
-	var externalID, avatarURL sql.NullString
+	var externalID, avatarURL, passwordHash sql.NullString
 	var lastLoginAt sql.NullTime
 	var settingsJSON []byte
 
 	err := rows.Scan(
-		&user.ID, &user.TenantID, &externalID, &user.Email, &user.Name,
+		&user.ID, &user.TenantID, &externalID, &user.Email, &passwordHash, &user.Name,
 		&avatarURL, &user.Role, &settingsJSON, &lastLoginAt,
 		&user.CreatedAt, &user.UpdatedAt,
 	)
@@ -310,6 +316,9 @@ func (r *UserRepository) scanUserFromRows(rows *sql.Rows) (*entity.User, error) 
 	}
 	if avatarURL.Valid {
 		user.AvatarURL = avatarURL.String
+	}
+	if passwordHash.Valid {
+		user.PasswordHash = passwordHash.String
 	}
 	if lastLoginAt.Valid {
 		t := lastLoginAt.Time
