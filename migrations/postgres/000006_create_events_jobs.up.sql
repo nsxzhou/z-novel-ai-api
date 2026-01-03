@@ -49,11 +49,18 @@ CREATE TABLE IF NOT EXISTS generation_jobs (
     tokens_completion INT,
     duration_ms INT,
     retry_count INT DEFAULT 0,
+    progress INT DEFAULT 0,
     idempotency_key VARCHAR(128) UNIQUE,
     created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
     started_at TIMESTAMPTZ,
     completed_at TIMESTAMPTZ
 );
+
+CREATE TRIGGER update_generation_jobs_updated_at
+    BEFORE UPDATE ON generation_jobs
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
 
 CREATE INDEX IF NOT EXISTS idx_jobs_tenant ON generation_jobs (tenant_id);
 

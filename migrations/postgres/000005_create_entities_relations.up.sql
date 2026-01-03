@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS entities (
     type VARCHAR(32) NOT NULL,
     description TEXT,
     attributes JSONB DEFAULT '{}',
+    metadata JSONB DEFAULT '{}',
     current_state TEXT,
     first_appear_chapter_id UUID REFERENCES chapters(id),
     last_appear_chapter_id UUID REFERENCES chapters(id),
