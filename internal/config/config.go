@@ -54,6 +54,7 @@ type GRPCServerConfig struct {
 // DatabaseConfig 数据库配置
 type DatabaseConfig struct {
 	Postgres PostgresConfig `yaml:"postgres" mapstructure:"postgres"`
+	Milvus   MilvusConfig   `yaml:"milvus" mapstructure:"milvus"`
 }
 
 // PostgresConfig PostgreSQL 配置
