@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS users (
     name VARCHAR(128),
     avatar_url TEXT,
     role VARCHAR(32) DEFAULT 'member',
+    password_hash VARCHAR(255),
     settings JSONB DEFAULT '{}',
     last_login_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT NOW(),
