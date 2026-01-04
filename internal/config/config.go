@@ -146,10 +146,9 @@ type R2Config struct {
 type LLMConfig struct {
 	DefaultProvider string                    `yaml:"default_provider" mapstructure:"default_provider"`
 	Providers       map[string]ProviderConfig `yaml:"providers" mapstructure:"providers"`
-	FallbackChain   []string                  `yaml:"fallback_chain" mapstructure:"fallback_chain"`
 }
 
-// ProviderConfig LLM 提供商配置
+// ProviderConfig LLM 提供商配置 (兼容 OpenAI 格式)
 type ProviderConfig struct {
 	APIKey      string        `yaml:"api_key" mapstructure:"api_key"`
 	BaseURL     string        `yaml:"base_url" mapstructure:"base_url"`
@@ -166,6 +165,7 @@ type EmbeddingConfig struct {
 	Dimension int    `yaml:"dimension" mapstructure:"dimension"`
 	BatchSize int    `yaml:"batch_size" mapstructure:"batch_size"`
 	Endpoint  string `yaml:"endpoint" mapstructure:"endpoint"`
+	APIKey    string `yaml:"api_key" mapstructure:"api_key"` // 新增 APIKey 支持
 }
 
 // MessagingConfig 消息队列配置

@@ -87,9 +87,6 @@ services:
     volumes:
       - etcd_data:/bitnami/etcd
 
-  # MinIO (Milvus 依赖, 这里复用上面的 minio 服务或单独起一个)
-  # 为了简化，Milvus 也使用上面的 minio
-
   # Milvus Standalone - 向量数据库
   milvus:
     image: milvusdb/milvus:v2.4.0

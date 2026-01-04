@@ -89,16 +89,21 @@ llm:
       max_tokens: 8192
       temperature: 0.7
       timeout: 120s
-  fallback_chain:
-    - "openai"
-    - "deepseek"
+    siliconflow:
+      api_key: "${SILICONFLOW_API_KEY}"
+      base_url: "https://api.siliconflow.cn/v1"
+      model: "deepseek-ai/DeepSeek-V3"
+      max_tokens: 4096
+      temperature: 0.7
+      timeout: 120s
 
 embedding:
-  provider: "local"
+  provider: "openai" # 切换为通用 openai 格式
   model: "BAAI/bge-m3"
   dimension: 1024
   batch_size: 32
-  endpoint: "${EMBEDDING_ENDPOINT:http://localhost:8000}"
+  endpoint: "http://localhost:8000"
+  api_key: "${EMBEDDING_API_KEY}"
 
 messaging:
   redis_stream:
