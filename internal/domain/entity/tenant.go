@@ -30,14 +30,19 @@ type TenantSettings struct {
 
 // Tenant 租户实体
 type Tenant struct {
-	ID        string          `json:"id"`
-	Name      string          `json:"name"`
-	Slug      string          `json:"slug"`
-	Settings  *TenantSettings `json:"settings,omitempty"`
-	Quota     *TenantQuota    `json:"quota,omitempty"`
-	Status    TenantStatus    `json:"status"`
-	CreatedAt time.Time       `json:"created_at"`
-	UpdatedAt time.Time       `json:"updated_at"`
+	ID        string          `json:"id" gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
+	Name      string          `json:"name" gorm:"type:varchar(255);not null"`
+	Slug      string          `json:"slug" gorm:"type:varchar(100);uniqueIndex;not null"`
+	Settings  *TenantSettings `json:"settings,omitempty" gorm:"type:jsonb;serializer:json"`
+	Quota     *TenantQuota    `json:"quota,omitempty" gorm:"type:jsonb;serializer:json"`
+	Status    TenantStatus    `json:"status" gorm:"type:varchar(50);default:'active'"`
+	CreatedAt time.Time       `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt time.Time       `json:"updated_at" gorm:"autoUpdateTime"`
+}
+
+// TableName 指定表名
+func (Tenant) TableName() string {
+	return "tenants"
 }
 
 // NewTenant 创建新租户

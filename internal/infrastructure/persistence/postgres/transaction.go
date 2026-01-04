@@ -3,11 +3,12 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
-	"fmt"
 
-	"z-novel-ai-api/internal/domain/repository"
+	"gorm.io/gorm"
 )
+
+// gormTxKey GORM 事务上下文键
+type gormTxKey struct{}
 
 // TxManager 事务管理器
 type TxManager struct {
@@ -22,55 +23,30 @@ func NewTxManager(client *Client) *TxManager {
 // WithTransaction 在事务中执行操作
 func (m *TxManager) WithTransaction(ctx context.Context, fn func(ctx context.Context) error) error {
 	// 检查是否已在事务中
-	if tx := getTxFromContext(ctx); tx != nil {
+	if tx := GetTxFromContext(ctx); tx != nil {
 		// 已在事务中，直接执行
 		return fn(ctx)
 	}
 
 	// 开始新事务
-	tx, err := m.client.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-
-	// 将事务放入上下文
-	txCtx := context.WithValue(ctx, repository.TxKey{}, tx)
-
-	// 执行操作
-	if err := fn(txCtx); err != nil {
-		if rbErr := tx.Rollback(); rbErr != nil {
-			return fmt.Errorf("rollback failed: %v, original error: %w", rbErr, err)
-		}
-		return err
-	}
-
-	// 提交事务
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
-	}
-
-	return nil
+	return m.client.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		txCtx := context.WithValue(ctx, gormTxKey{}, tx)
+		return fn(txCtx)
+	})
 }
 
-// getTxFromContext 从上下文获取事务
-func getTxFromContext(ctx context.Context) *sql.Tx {
-	if tx, ok := ctx.Value(repository.TxKey{}).(*sql.Tx); ok {
+// GetTxFromContext 从上下文获取事务
+func GetTxFromContext(ctx context.Context) *gorm.DB {
+	if tx, ok := ctx.Value(gormTxKey{}).(*gorm.DB); ok {
 		return tx
 	}
 	return nil
 }
 
-// Querier 查询接口（支持普通连接和事务）
-type Querier interface {
-	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
-	QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error)
-	QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row
-}
-
-// getQuerier 根据上下文获取查询器
-func getQuerier(ctx context.Context, db *sql.DB) Querier {
-	if tx := getTxFromContext(ctx); tx != nil {
-		return tx
+// getDB 根据上下文获取数据库实例（事务或普通连接）
+func getDB(ctx context.Context, db *gorm.DB) *gorm.DB {
+	if tx := GetTxFromContext(ctx); tx != nil {
+		return tx.WithContext(ctx)
 	}
-	return db
+	return db.WithContext(ctx)
 }

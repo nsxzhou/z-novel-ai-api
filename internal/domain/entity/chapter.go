@@ -27,23 +27,28 @@ type GenerationMetadata struct {
 
 // Chapter 章节实体
 type Chapter struct {
-	ID                 string              `json:"id"`
-	ProjectID          string              `json:"project_id"`
-	VolumeID           string              `json:"volume_id,omitempty"`
-	SeqNum             int                 `json:"seq_num"`
-	Title              string              `json:"title,omitempty"`
-	Outline            string              `json:"outline,omitempty"`
-	ContentText        string              `json:"content_text,omitempty"`
-	Summary            string              `json:"summary,omitempty"`
-	Notes              string              `json:"notes,omitempty"`
+	ID                 string              `json:"id" gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
+	ProjectID          string              `json:"project_id" gorm:"type:uuid;index;not null"`
+	VolumeID           string              `json:"volume_id,omitempty" gorm:"type:uuid;index"`
+	SeqNum             int                 `json:"seq_num" gorm:"not null"`
+	Title              string              `json:"title,omitempty" gorm:"type:varchar(255)"`
+	Outline            string              `json:"outline,omitempty" gorm:"type:text"`
+	ContentText        string              `json:"content_text,omitempty" gorm:"type:text"`
+	Summary            string              `json:"summary,omitempty" gorm:"type:text"`
+	Notes              string              `json:"notes,omitempty" gorm:"type:text"`
 	StoryTimeStart     int64               `json:"story_time_start,omitempty"`
 	StoryTimeEnd       int64               `json:"story_time_end,omitempty"`
-	WordCount          int                 `json:"word_count"`
-	Status             ChapterStatus       `json:"status"`
-	GenerationMetadata *GenerationMetadata `json:"generation_metadata,omitempty"`
-	Version            int                 `json:"version"`
-	CreatedAt          time.Time           `json:"created_at"`
-	UpdatedAt          time.Time           `json:"updated_at"`
+	WordCount          int                 `json:"word_count" gorm:"default:0"`
+	Status             ChapterStatus       `json:"status" gorm:"type:varchar(50);default:'draft'"`
+	GenerationMetadata *GenerationMetadata `json:"generation_metadata,omitempty" gorm:"type:jsonb;serializer:json"`
+	Version            int                 `json:"version" gorm:"default:1"`
+	CreatedAt          time.Time           `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt          time.Time           `json:"updated_at" gorm:"autoUpdateTime"`
+}
+
+// TableName 指定表名
+func (Chapter) TableName() string {
+	return "chapters"
 }
 
 // NewChapter 创建新章节

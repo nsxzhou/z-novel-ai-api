@@ -2,6 +2,8 @@
 package entity
 
 import (
+	"database/sql/driver"
+	"encoding/json"
 	"time"
 )
 
@@ -36,24 +38,69 @@ type EntityAttributes struct {
 	Background  string   `json:"background,omitempty"`
 }
 
+// StringSlice 用于 GORM JSON 序列化的字符串切片
+type StringSlice []string
+
+// Value 实现 driver.Valuer 接口
+func (s StringSlice) Value() (driver.Value, error) {
+	if s == nil {
+		return nil, nil
+	}
+	return json.Marshal(s)
+}
+
+// Scan 实现 sql.Scanner 接口
+func (s *StringSlice) Scan(value interface{}) error {
+	if value == nil {
+		*s = nil
+		return nil
+	}
+	return json.Unmarshal(value.([]byte), s)
+}
+
+// StringMap 用于 GORM JSON 序列化的字符串映射
+type StringMap map[string]string
+
+// Value 实现 driver.Valuer 接口
+func (m StringMap) Value() (driver.Value, error) {
+	if m == nil {
+		return nil, nil
+	}
+	return json.Marshal(m)
+}
+
+// Scan 实现 sql.Scanner 接口
+func (m *StringMap) Scan(value interface{}) error {
+	if value == nil {
+		*m = nil
+		return nil
+	}
+	return json.Unmarshal(value.([]byte), m)
+}
+
 // StoryEntity 故事实体（角色/物品/地点等）
 type StoryEntity struct {
-	ID                   string            `json:"id"`
-	ProjectID            string            `json:"project_id"`
-	Name                 string            `json:"name"`
-	Aliases              []string          `json:"aliases,omitempty"`
-	Type                 StoryEntityType   `json:"type"`
-	Description          string            `json:"description,omitempty"`
-	Attributes           *EntityAttributes `json:"attributes,omitempty"`
-	Metadata             map[string]string `json:"metadata,omitempty"` // 扩展属性
-	CurrentState         string            `json:"current_state,omitempty"`
-	FirstAppearChapterID string            `json:"first_appear_chapter_id,omitempty"`
-	LastAppearChapterID  string            `json:"last_appear_chapter_id,omitempty"`
-	AppearCount          int               `json:"appear_count"`
-	Importance           EntityImportance  `json:"importance"`
-	VectorID             string            `json:"vector_id,omitempty"`
-	CreatedAt            time.Time         `json:"created_at"`
-	UpdatedAt            time.Time         `json:"updated_at"`
+	ID                   string            `json:"id" gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
+	ProjectID            string            `json:"project_id" gorm:"type:uuid;index;not null"`
+	Name                 string            `json:"name" gorm:"type:varchar(255);not null"`
+	Aliases              StringSlice       `json:"aliases,omitempty" gorm:"type:jsonb"`
+	Type                 StoryEntityType   `json:"type" gorm:"type:varchar(50);not null"`
+	Description          string            `json:"description,omitempty" gorm:"type:text"`
+	Attributes           *EntityAttributes `json:"attributes,omitempty" gorm:"type:jsonb;serializer:json"`
+	Metadata             StringMap         `json:"metadata,omitempty" gorm:"type:jsonb"`
+	CurrentState         string            `json:"current_state,omitempty" gorm:"type:text"`
+	FirstAppearChapterID string            `json:"first_appear_chapter_id,omitempty" gorm:"type:uuid"`
+	LastAppearChapterID  string            `json:"last_appear_chapter_id,omitempty" gorm:"type:uuid"`
+	AppearCount          int               `json:"appear_count" gorm:"default:0"`
+	Importance           EntityImportance  `json:"importance" gorm:"type:varchar(50);default:'secondary'"`
+	VectorID             string            `json:"vector_id,omitempty" gorm:"type:varchar(255)"`
+	CreatedAt            time.Time         `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt            time.Time         `json:"updated_at" gorm:"autoUpdateTime"`
+}
+
+// TableName 指定表名
+func (StoryEntity) TableName() string {
+	return "entities"
 }
 
 // NewStoryEntity 创建新实体
@@ -67,9 +114,9 @@ func NewStoryEntity(projectID, name string, entityType StoryEntityType, importan
 		ProjectID:   projectID,
 		Name:        name,
 		Type:        entityType,
-		Aliases:     []string{},
+		Aliases:     StringSlice{},
 		Attributes:  &EntityAttributes{Abilities: []string{}},
-		Metadata:    make(map[string]string),
+		Metadata:    make(StringMap),
 		AppearCount: 0,
 		Importance:  imp,
 		CreatedAt:   now,

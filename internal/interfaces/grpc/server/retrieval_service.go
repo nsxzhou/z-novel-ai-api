@@ -5,9 +5,9 @@ import (
 	"context"
 
 	retrievalv1 "z-novel-ai-api/api/proto/gen/go/retrieval"
-	"z-novel-ai-api/internal/infrastructure/embedding"
 	"z-novel-ai-api/internal/infrastructure/persistence/milvus"
 
+	"github.com/cloudwego/eino/components/embedding"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -16,14 +16,14 @@ import (
 type RetrievalService struct {
 	retrievalv1.UnimplementedRetrievalServiceServer
 
-	embedClient *embedding.Client
-	milvusRepo  *milvus.Repository
+	embedder   embedding.Embedder
+	milvusRepo *milvus.Repository
 }
 
-func NewRetrievalService(embedClient *embedding.Client, milvusRepo *milvus.Repository) *RetrievalService {
+func NewRetrievalService(embedder embedding.Embedder, milvusRepo *milvus.Repository) *RetrievalService {
 	return &RetrievalService{
-		embedClient: embedClient,
-		milvusRepo:  milvusRepo,
+		embedder:   embedder,
+		milvusRepo: milvusRepo,
 	}
 }
 

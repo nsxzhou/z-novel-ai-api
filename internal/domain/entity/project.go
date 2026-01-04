@@ -32,19 +32,24 @@ type ProjectSettings struct {
 
 // Project 小说项目实体
 type Project struct {
-	ID               string           `json:"id"`
-	TenantID         string           `json:"tenant_id"`
-	OwnerID          string           `json:"owner_id,omitempty"`
-	Title            string           `json:"title"`
-	Description      string           `json:"description,omitempty"`
-	Genre            string           `json:"genre,omitempty"`
+	ID               string           `json:"id" gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
+	TenantID         string           `json:"tenant_id" gorm:"type:uuid;index;not null"`
+	OwnerID          string           `json:"owner_id,omitempty" gorm:"type:uuid;index"`
+	Title            string           `json:"title" gorm:"type:varchar(255);not null"`
+	Description      string           `json:"description,omitempty" gorm:"type:text"`
+	Genre            string           `json:"genre,omitempty" gorm:"type:varchar(100)"`
 	TargetWordCount  int              `json:"target_word_count,omitempty"`
-	CurrentWordCount int              `json:"current_word_count"`
-	Settings         *ProjectSettings `json:"settings,omitempty"`
-	WorldSettings    *WorldSettings   `json:"world_settings,omitempty"`
-	Status           ProjectStatus    `json:"status"`
-	CreatedAt        time.Time        `json:"created_at"`
-	UpdatedAt        time.Time        `json:"updated_at"`
+	CurrentWordCount int              `json:"current_word_count" gorm:"default:0"`
+	Settings         *ProjectSettings `json:"settings,omitempty" gorm:"type:jsonb;serializer:json"`
+	WorldSettings    *WorldSettings   `json:"world_settings,omitempty" gorm:"type:jsonb;serializer:json"`
+	Status           ProjectStatus    `json:"status" gorm:"type:varchar(50);default:'draft'"`
+	CreatedAt        time.Time        `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt        time.Time        `json:"updated_at" gorm:"autoUpdateTime"`
+}
+
+// TableName 指定表名
+func (Project) TableName() string {
+	return "projects"
 }
 
 // NewProject 创建新项目

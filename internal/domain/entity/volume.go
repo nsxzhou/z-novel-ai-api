@@ -16,16 +16,21 @@ const (
 
 // Volume 卷/部实体
 type Volume struct {
-	ID          string       `json:"id"`
-	ProjectID   string       `json:"project_id"`
-	SeqNum      int          `json:"seq_num"`
-	Title       string       `json:"title,omitempty"`
-	Description string       `json:"description,omitempty"`
-	Summary     string       `json:"summary,omitempty"`
-	WordCount   int          `json:"word_count"`
-	Status      VolumeStatus `json:"status"`
-	CreatedAt   time.Time    `json:"created_at"`
-	UpdatedAt   time.Time    `json:"updated_at"`
+	ID          string       `json:"id" gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
+	ProjectID   string       `json:"project_id" gorm:"type:uuid;index;not null"`
+	SeqNum      int          `json:"seq_num" gorm:"not null"`
+	Title       string       `json:"title,omitempty" gorm:"type:varchar(255)"`
+	Description string       `json:"description,omitempty" gorm:"type:text"`
+	Summary     string       `json:"summary,omitempty" gorm:"type:text"`
+	WordCount   int          `json:"word_count" gorm:"default:0"`
+	Status      VolumeStatus `json:"status" gorm:"type:varchar(50);default:'draft'"`
+	CreatedAt   time.Time    `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt   time.Time    `json:"updated_at" gorm:"autoUpdateTime"`
+}
+
+// TableName 指定表名
+func (Volume) TableName() string {
+	return "volumes"
 }
 
 // NewVolume 创建新卷

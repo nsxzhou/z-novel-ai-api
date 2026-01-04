@@ -5,21 +5,23 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
+	"os"
 	"time"
 
-	_ "github.com/lib/pq"
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 
 	"z-novel-ai-api/internal/config"
 )
 
 var tracer = otel.Tracer("postgres")
 
-// Client PostgreSQL 客户端
+// Client PostgreSQL 客户端（GORM 版本）
 type Client struct {
-	db     *sql.DB
+	db     *gorm.DB
 	config *config.PostgresConfig
 }
 
@@ -30,22 +32,42 @@ func NewClient(cfg *config.PostgresConfig) (*Client, error) {
 		cfg.Host, cfg.Port, cfg.User, cfg.Password, cfg.Database, cfg.SSLMode,
 	)
 
-	db, err := sql.Open("postgres", dsn)
+	// 配置 GORM 日志
+	gormLogger := logger.New(
+		log.New(os.Stdout, "\r\n", log.LstdFlags),
+		logger.Config{
+			SlowThreshold:             time.Second,
+			LogLevel:                  logger.Info,
+			IgnoreRecordNotFoundError: true,
+			Colorful:                  true,
+		},
+	)
+
+	gormConfig := &gorm.Config{
+		Logger: gormLogger,
+	}
+
+	db, err := gorm.Open(postgres.Open(dsn), gormConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
 	// 配置连接池
-	db.SetMaxOpenConns(cfg.MaxOpenConns)
-	db.SetMaxIdleConns(cfg.MaxIdleConns)
-	db.SetConnMaxLifetime(cfg.ConnMaxLifetime)
-	db.SetConnMaxIdleTime(cfg.ConnMaxIdleTime)
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get underlying sql.DB: %w", err)
+	}
+
+	sqlDB.SetMaxOpenConns(cfg.MaxOpenConns)
+	sqlDB.SetMaxIdleConns(cfg.MaxIdleConns)
+	sqlDB.SetConnMaxLifetime(cfg.ConnMaxLifetime)
+	sqlDB.SetConnMaxIdleTime(cfg.ConnMaxIdleTime)
 
 	// 验证连接
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := db.PingContext(ctx); err != nil {
+	if err := sqlDB.PingContext(ctx); err != nil {
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
@@ -55,14 +77,23 @@ func NewClient(cfg *config.PostgresConfig) (*Client, error) {
 	}, nil
 }
 
-// DB 获取底层数据库连接
-func (c *Client) DB() *sql.DB {
+// DB 获取 GORM DB 实例
+func (c *Client) DB() *gorm.DB {
 	return c.db
+}
+
+// SqlDB 获取底层 sql.DB（用于健康检查等）
+func (c *Client) SqlDB() (*sql.DB, error) {
+	return c.db.DB()
 }
 
 // Close 关闭数据库连接
 func (c *Client) Close() error {
-	return c.db.Close()
+	sqlDB, err := c.db.DB()
+	if err != nil {
+		return err
+	}
+	return sqlDB.Close()
 }
 
 // Ping 检查数据库连接
@@ -70,12 +101,20 @@ func (c *Client) Ping(ctx context.Context) error {
 	ctx, span := tracer.Start(ctx, "postgres.Ping")
 	defer span.End()
 
-	return c.db.PingContext(ctx)
+	sqlDB, err := c.db.DB()
+	if err != nil {
+		return err
+	}
+	return sqlDB.PingContext(ctx)
 }
 
 // Stats 获取连接池统计信息
-func (c *Client) Stats() sql.DBStats {
-	return c.db.Stats()
+func (c *Client) Stats() (sql.DBStats, error) {
+	sqlDB, err := c.db.DB()
+	if err != nil {
+		return sql.DBStats{}, err
+	}
+	return sqlDB.Stats(), nil
 }
 
 // HealthCheck 健康检查
@@ -84,45 +123,10 @@ func (c *Client) HealthCheck(ctx context.Context) error {
 	defer span.End()
 
 	var result int
-	err := c.db.QueryRowContext(ctx, "SELECT 1").Scan(&result)
+	err := c.db.WithContext(ctx).Raw("SELECT 1").Scan(&result).Error
 	if err != nil {
 		span.RecordError(err)
 		return fmt.Errorf("health check failed: %w", err)
 	}
 	return nil
-}
-
-// ExecContext 执行 SQL（带追踪）
-func (c *Client) ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
-	ctx, span := tracer.Start(ctx, "postgres.Exec",
-		trace.WithAttributes(attribute.String("db.statement", query)))
-	defer span.End()
-
-	result, err := c.db.ExecContext(ctx, query, args...)
-	if err != nil {
-		span.RecordError(err)
-	}
-	return result, err
-}
-
-// QueryContext 查询 SQL（带追踪）
-func (c *Client) QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
-	ctx, span := tracer.Start(ctx, "postgres.Query",
-		trace.WithAttributes(attribute.String("db.statement", query)))
-	defer span.End()
-
-	rows, err := c.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		span.RecordError(err)
-	}
-	return rows, err
-}
-
-// QueryRowContext 查询单行 SQL（带追踪）
-func (c *Client) QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row {
-	_, span := tracer.Start(ctx, "postgres.QueryRow",
-		trace.WithAttributes(attribute.String("db.statement", query)))
-	defer span.End()
-
-	return c.db.QueryRowContext(ctx, query, args...)
 }

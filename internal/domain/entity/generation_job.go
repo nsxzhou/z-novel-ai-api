@@ -30,28 +30,33 @@ const (
 
 // GenerationJob 生成任务
 type GenerationJob struct {
-	ID             string          `json:"id"`
-	TenantID       string          `json:"tenant_id"`
-	ProjectID      string          `json:"project_id"`
-	ChapterID      string          `json:"chapter_id,omitempty"`
-	JobType        JobType         `json:"job_type"`
-	Status         JobStatus       `json:"status"`
-	Priority       int             `json:"priority"`
-	InputParams    json.RawMessage `json:"input_params"`
-	OutputResult   json.RawMessage `json:"output_result,omitempty"`
-	ErrorMessage   string          `json:"error_message,omitempty"`
-	LLMProvider    string          `json:"llm_provider,omitempty"`
-	LLMModel       string          `json:"llm_model,omitempty"`
+	ID             string          `json:"id" gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
+	TenantID       string          `json:"tenant_id" gorm:"type:uuid;index;not null"`
+	ProjectID      string          `json:"project_id" gorm:"type:uuid;index;not null"`
+	ChapterID      string          `json:"chapter_id,omitempty" gorm:"type:uuid;index"`
+	JobType        JobType         `json:"job_type" gorm:"type:varchar(50);not null"`
+	Status         JobStatus       `json:"status" gorm:"type:varchar(50);default:'pending';index"`
+	Priority       int             `json:"priority" gorm:"default:5"`
+	InputParams    json.RawMessage `json:"input_params" gorm:"type:jsonb"`
+	OutputResult   json.RawMessage `json:"output_result,omitempty" gorm:"type:jsonb"`
+	ErrorMessage   string          `json:"error_message,omitempty" gorm:"type:text"`
+	LLMProvider    string          `json:"llm_provider,omitempty" gorm:"type:varchar(100)"`
+	LLMModel       string          `json:"llm_model,omitempty" gorm:"type:varchar(100)"`
 	TokensPrompt   int             `json:"tokens_prompt,omitempty"`
-	TokensComplete int             `json:"tokens_completion,omitempty"`
+	TokensComplete int             `json:"tokens_completion,omitempty" gorm:"column:tokens_completion"`
 	DurationMs     int             `json:"duration_ms,omitempty"`
-	RetryCount     int             `json:"retry_count"`
-	Progress       int             `json:"progress"` // 任务进度 (0-100)
-	IdempotencyKey string          `json:"idempotency_key,omitempty"`
-	CreatedAt      time.Time       `json:"created_at"`
-	UpdatedAt      time.Time       `json:"updated_at"`
+	RetryCount     int             `json:"retry_count" gorm:"default:0"`
+	Progress       int             `json:"progress" gorm:"default:0"`
+	IdempotencyKey string          `json:"idempotency_key,omitempty" gorm:"type:varchar(255);uniqueIndex"`
+	CreatedAt      time.Time       `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt      time.Time       `json:"updated_at" gorm:"autoUpdateTime"`
 	StartedAt      *time.Time      `json:"started_at,omitempty"`
 	CompletedAt    *time.Time      `json:"completed_at,omitempty"`
+}
+
+// TableName 指定表名
+func (GenerationJob) TableName() string {
+	return "generation_jobs"
 }
 
 // NewGenerationJob 创建新任务

@@ -3,9 +3,9 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
-	"encoding/json"
 	"fmt"
+
+	"gorm.io/gorm"
 
 	"z-novel-ai-api/internal/domain/entity"
 	"z-novel-ai-api/internal/domain/repository"
@@ -26,33 +26,11 @@ func (r *ProjectRepository) Create(ctx context.Context, project *entity.Project)
 	ctx, span := tracer.Start(ctx, "postgres.ProjectRepository.Create")
 	defer span.End()
 
-	q := getQuerier(ctx, r.client.db)
-
-	settingsJSON, _ := json.Marshal(project.Settings)
-	worldSettingsJSON, _ := json.Marshal(project.WorldSettings)
-
-	query := `
-		INSERT INTO projects (id, tenant_id, owner_id, title, description, genre, target_word_count, 
-			current_word_count, settings, world_settings, status, created_at, updated_at)
-		VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
-		RETURNING id, created_at, updated_at
-	`
-
-	var ownerID sql.NullString
-	if project.OwnerID != "" {
-		ownerID = sql.NullString{String: project.OwnerID, Valid: true}
-	}
-
-	err := q.QueryRowContext(ctx, query,
-		project.TenantID, ownerID, project.Title, project.Description, project.Genre,
-		project.TargetWordCount, project.CurrentWordCount, settingsJSON, worldSettingsJSON, project.Status,
-	).Scan(&project.ID, &project.CreatedAt, &project.UpdatedAt)
-
-	if err != nil {
+	db := getDB(ctx, r.client.db)
+	if err := db.Create(project).Error; err != nil {
 		span.RecordError(err)
 		return fmt.Errorf("failed to create project: %w", err)
 	}
-
 	return nil
 }
 
@@ -61,40 +39,15 @@ func (r *ProjectRepository) GetByID(ctx context.Context, id string) (*entity.Pro
 	ctx, span := tracer.Start(ctx, "postgres.ProjectRepository.GetByID")
 	defer span.End()
 
-	q := getQuerier(ctx, r.client.db)
-
-	query := `
-		SELECT id, tenant_id, owner_id, title, description, genre, target_word_count, 
-			current_word_count, settings, world_settings, status, created_at, updated_at
-		FROM projects
-		WHERE id = $1
-	`
-
+	db := getDB(ctx, r.client.db)
 	var project entity.Project
-	var ownerID sql.NullString
-	var settingsJSON, worldSettingsJSON []byte
-
-	err := q.QueryRowContext(ctx, query, id).Scan(
-		&project.ID, &project.TenantID, &ownerID, &project.Title, &project.Description,
-		&project.Genre, &project.TargetWordCount, &project.CurrentWordCount,
-		&settingsJSON, &worldSettingsJSON, &project.Status,
-		&project.CreatedAt, &project.UpdatedAt,
-	)
-
-	if err != nil {
-		if err == sql.ErrNoRows {
+	if err := db.First(&project, "id = ?", id).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
 			return nil, nil
 		}
 		span.RecordError(err)
 		return nil, fmt.Errorf("failed to get project: %w", err)
 	}
-
-	if ownerID.Valid {
-		project.OwnerID = ownerID.String
-	}
-	json.Unmarshal(settingsJSON, &project.Settings)
-	json.Unmarshal(worldSettingsJSON, &project.WorldSettings)
-
 	return &project, nil
 }
 
@@ -103,29 +56,11 @@ func (r *ProjectRepository) Update(ctx context.Context, project *entity.Project)
 	ctx, span := tracer.Start(ctx, "postgres.ProjectRepository.Update")
 	defer span.End()
 
-	q := getQuerier(ctx, r.client.db)
-
-	settingsJSON, _ := json.Marshal(project.Settings)
-	worldSettingsJSON, _ := json.Marshal(project.WorldSettings)
-
-	query := `
-		UPDATE projects
-		SET title = $1, description = $2, genre = $3, target_word_count = $4, 
-			current_word_count = $5, settings = $6, world_settings = $7, status = $8, updated_at = NOW()
-		WHERE id = $9
-		RETURNING updated_at
-	`
-
-	err := q.QueryRowContext(ctx, query,
-		project.Title, project.Description, project.Genre, project.TargetWordCount,
-		project.CurrentWordCount, settingsJSON, worldSettingsJSON, project.Status, project.ID,
-	).Scan(&project.UpdatedAt)
-
-	if err != nil {
+	db := getDB(ctx, r.client.db)
+	if err := db.Save(project).Error; err != nil {
 		span.RecordError(err)
 		return fmt.Errorf("failed to update project: %w", err)
 	}
-
 	return nil
 }
 
@@ -134,16 +69,11 @@ func (r *ProjectRepository) Delete(ctx context.Context, id string) error {
 	ctx, span := tracer.Start(ctx, "postgres.ProjectRepository.Delete")
 	defer span.End()
 
-	q := getQuerier(ctx, r.client.db)
-
-	query := `DELETE FROM projects WHERE id = $1`
-	_, err := q.ExecContext(ctx, query, id)
-
-	if err != nil {
+	db := getDB(ctx, r.client.db)
+	if err := db.Delete(&entity.Project{}, "id = ?", id).Error; err != nil {
 		span.RecordError(err)
 		return fmt.Errorf("failed to delete project: %w", err)
 	}
-
 	return nil
 }
 
@@ -152,80 +82,37 @@ func (r *ProjectRepository) List(ctx context.Context, filter *repository.Project
 	ctx, span := tracer.Start(ctx, "postgres.ProjectRepository.List")
 	defer span.End()
 
-	q := getQuerier(ctx, r.client.db)
+	db := getDB(ctx, r.client.db)
+	query := db.Model(&entity.Project{})
 
-	// 构建查询条件
-	whereClause := "1=1"
-	args := []interface{}{}
-	argIdx := 1
-
+	// 应用过滤条件
 	if filter != nil {
 		if filter.OwnerID != "" {
-			whereClause += fmt.Sprintf(" AND owner_id = $%d", argIdx)
-			args = append(args, filter.OwnerID)
-			argIdx++
+			query = query.Where("owner_id = ?", filter.OwnerID)
 		}
 		if filter.Genre != "" {
-			whereClause += fmt.Sprintf(" AND genre = $%d", argIdx)
-			args = append(args, filter.Genre)
-			argIdx++
+			query = query.Where("genre = ?", filter.Genre)
 		}
 		if filter.Status != "" {
-			whereClause += fmt.Sprintf(" AND status = $%d", argIdx)
-			args = append(args, filter.Status)
-			argIdx++
+			query = query.Where("status = ?", filter.Status)
 		}
 	}
 
 	// 获取总数
 	var total int64
-	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM projects WHERE %s`, whereClause)
-	if err := q.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := query.Count(&total).Error; err != nil {
 		span.RecordError(err)
 		return nil, fmt.Errorf("failed to count projects: %w", err)
 	}
 
 	// 获取列表
-	query := fmt.Sprintf(`
-		SELECT id, tenant_id, owner_id, title, description, genre, target_word_count, 
-			current_word_count, settings, world_settings, status, created_at, updated_at
-		FROM projects
-		WHERE %s
-		ORDER BY updated_at DESC
-		LIMIT $%d OFFSET $%d
-	`, whereClause, argIdx, argIdx+1)
-
-	args = append(args, pagination.Limit(), pagination.Offset())
-
-	rows, err := q.QueryContext(ctx, query, args...)
-	if err != nil {
+	var projects []*entity.Project
+	if err := query.Order("updated_at DESC").
+		Offset(pagination.Offset()).
+		Limit(pagination.Limit()).
+		Find(&projects).Error; err != nil {
 		span.RecordError(err)
 		return nil, fmt.Errorf("failed to list projects: %w", err)
-	}
-	defer rows.Close()
-
-	var projects []*entity.Project
-	for rows.Next() {
-		var project entity.Project
-		var ownerID sql.NullString
-		var settingsJSON, worldSettingsJSON []byte
-
-		if err := rows.Scan(
-			&project.ID, &project.TenantID, &ownerID, &project.Title, &project.Description,
-			&project.Genre, &project.TargetWordCount, &project.CurrentWordCount,
-			&settingsJSON, &worldSettingsJSON, &project.Status,
-			&project.CreatedAt, &project.UpdatedAt,
-		); err != nil {
-			span.RecordError(err)
-			return nil, fmt.Errorf("failed to scan project: %w", err)
-		}
-
-		if ownerID.Valid {
-			project.OwnerID = ownerID.String
-		}
-		json.Unmarshal(settingsJSON, &project.Settings)
-		json.Unmarshal(worldSettingsJSON, &project.WorldSettings)
-		projects = append(projects, &project)
 	}
 
 	return repository.NewPagedResult(projects, total, pagination), nil
@@ -241,16 +128,11 @@ func (r *ProjectRepository) UpdateStatus(ctx context.Context, id string, status 
 	ctx, span := tracer.Start(ctx, "postgres.ProjectRepository.UpdateStatus")
 	defer span.End()
 
-	q := getQuerier(ctx, r.client.db)
-
-	query := `UPDATE projects SET status = $1, updated_at = NOW() WHERE id = $2`
-	_, err := q.ExecContext(ctx, query, status, id)
-
-	if err != nil {
+	db := getDB(ctx, r.client.db)
+	if err := db.Model(&entity.Project{}).Where("id = ?", id).Update("status", status).Error; err != nil {
 		span.RecordError(err)
 		return fmt.Errorf("failed to update project status: %w", err)
 	}
-
 	return nil
 }
 
@@ -259,16 +141,11 @@ func (r *ProjectRepository) UpdateWordCount(ctx context.Context, id string, word
 	ctx, span := tracer.Start(ctx, "postgres.ProjectRepository.UpdateWordCount")
 	defer span.End()
 
-	q := getQuerier(ctx, r.client.db)
-
-	query := `UPDATE projects SET current_word_count = $1, updated_at = NOW() WHERE id = $2`
-	_, err := q.ExecContext(ctx, query, wordCount, id)
-
-	if err != nil {
+	db := getDB(ctx, r.client.db)
+	if err := db.Model(&entity.Project{}).Where("id = ?", id).Update("current_word_count", wordCount).Error; err != nil {
 		span.RecordError(err)
 		return fmt.Errorf("failed to update word count: %w", err)
 	}
-
 	return nil
 }
 
@@ -277,20 +154,17 @@ func (r *ProjectRepository) GetStats(ctx context.Context, id string) (*repositor
 	ctx, span := tracer.Start(ctx, "postgres.ProjectRepository.GetStats")
 	defer span.End()
 
-	q := getQuerier(ctx, r.client.db)
-
-	query := `
-		SELECT 
-			COALESCE((SELECT COUNT(*) FROM chapters WHERE project_id = $1), 0) as total_chapters,
-			COALESCE((SELECT COUNT(*) FROM volumes WHERE project_id = $1), 0) as total_volumes,
-			COALESCE((SELECT COUNT(*) FROM entities WHERE project_id = $1), 0) as total_entities,
-			COALESCE((SELECT SUM(word_count) FROM chapters WHERE project_id = $1), 0) as total_word_count
-	`
-
+	db := getDB(ctx, r.client.db)
 	var stats repository.ProjectStats
-	err := q.QueryRowContext(ctx, query, id).Scan(
-		&stats.TotalChapters, &stats.TotalVolumes, &stats.TotalEntities, &stats.TotalWordCount,
-	)
+
+	// 使用原生 SQL 进行聚合查询
+	err := db.Raw(`
+		SELECT 
+			COALESCE((SELECT COUNT(*) FROM chapters WHERE project_id = ?), 0) as total_chapters,
+			COALESCE((SELECT COUNT(*) FROM volumes WHERE project_id = ?), 0) as total_volumes,
+			COALESCE((SELECT COUNT(*) FROM entities WHERE project_id = ?), 0) as total_entities,
+			COALESCE((SELECT SUM(word_count) FROM chapters WHERE project_id = ?), 0) as total_word_count
+	`, id, id, id, id).Scan(&stats).Error
 
 	if err != nil {
 		span.RecordError(err)

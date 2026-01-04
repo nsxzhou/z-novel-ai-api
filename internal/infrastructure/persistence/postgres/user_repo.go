@@ -3,9 +3,10 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
-	"encoding/json"
 	"fmt"
+	"time"
+
+	"gorm.io/gorm"
 
 	"z-novel-ai-api/internal/domain/entity"
 	"z-novel-ai-api/internal/domain/repository"
@@ -26,41 +27,11 @@ func (r *UserRepository) Create(ctx context.Context, user *entity.User) error {
 	ctx, span := tracer.Start(ctx, "postgres.UserRepository.Create")
 	defer span.End()
 
-	q := getQuerier(ctx, r.client.db)
-
-	settingsJSON, _ := json.Marshal(user.Settings)
-
-	query := `
-		INSERT INTO users (id, tenant_id, external_id, email, password_hash, name, avatar_url, role, settings, last_login_at, created_at, updated_at)
-		VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
-		RETURNING id, created_at, updated_at
-	`
-
-	var externalID, avatarURL, passwordHash sql.NullString
-	var lastLoginAt sql.NullTime
-
-	if user.ExternalID != "" {
-		externalID = sql.NullString{String: user.ExternalID, Valid: true}
-	}
-	if user.AvatarURL != "" {
-		avatarURL = sql.NullString{String: user.AvatarURL, Valid: true}
-	}
-	if user.PasswordHash != "" {
-		passwordHash = sql.NullString{String: user.PasswordHash, Valid: true}
-	}
-	if user.LastLoginAt != nil {
-		lastLoginAt = sql.NullTime{Time: *user.LastLoginAt, Valid: true}
-	}
-
-	err := q.QueryRowContext(ctx, query,
-		user.TenantID, externalID, user.Email, passwordHash, user.Name, avatarURL, user.Role, settingsJSON, lastLoginAt,
-	).Scan(&user.ID, &user.CreatedAt, &user.UpdatedAt)
-
-	if err != nil {
+	db := getDB(ctx, r.client.db)
+	if err := db.Create(user).Error; err != nil {
 		span.RecordError(err)
 		return fmt.Errorf("failed to create user: %w", err)
 	}
-
 	return nil
 }
 
@@ -69,15 +40,16 @@ func (r *UserRepository) GetByID(ctx context.Context, id string) (*entity.User, 
 	ctx, span := tracer.Start(ctx, "postgres.UserRepository.GetByID")
 	defer span.End()
 
-	q := getQuerier(ctx, r.client.db)
-
-	query := `
-		SELECT id, tenant_id, external_id, email, password_hash, name, avatar_url, role, settings, last_login_at, created_at, updated_at
-		FROM users
-		WHERE id = $1
-	`
-
-	return r.scanUser(q.QueryRowContext(ctx, query, id))
+	db := getDB(ctx, r.client.db)
+	var user entity.User
+	if err := db.First(&user, "id = ?", id).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		span.RecordError(err)
+		return nil, fmt.Errorf("failed to get user: %w", err)
+	}
+	return &user, nil
 }
 
 // GetByEmail 根据邮箱获取用户
@@ -85,15 +57,16 @@ func (r *UserRepository) GetByEmail(ctx context.Context, tenantID, email string)
 	ctx, span := tracer.Start(ctx, "postgres.UserRepository.GetByEmail")
 	defer span.End()
 
-	q := getQuerier(ctx, r.client.db)
-
-	query := `
-		SELECT id, tenant_id, external_id, email, password_hash, name, avatar_url, role, settings, last_login_at, created_at, updated_at
-		FROM users
-		WHERE tenant_id = $1 AND email = $2
-	`
-
-	return r.scanUser(q.QueryRowContext(ctx, query, tenantID, email))
+	db := getDB(ctx, r.client.db)
+	var user entity.User
+	if err := db.First(&user, "tenant_id = ? AND email = ?", tenantID, email).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		span.RecordError(err)
+		return nil, fmt.Errorf("failed to get user by email: %w", err)
+	}
+	return &user, nil
 }
 
 // GetByExternalID 根据外部 ID 获取用户
@@ -101,15 +74,16 @@ func (r *UserRepository) GetByExternalID(ctx context.Context, externalID string)
 	ctx, span := tracer.Start(ctx, "postgres.UserRepository.GetByExternalID")
 	defer span.End()
 
-	q := getQuerier(ctx, r.client.db)
-
-	query := `
-		SELECT id, tenant_id, external_id, email, name, avatar_url, role, settings, last_login_at, created_at, updated_at
-		FROM users
-		WHERE external_id = $1
-	`
-
-	return r.scanUser(q.QueryRowContext(ctx, query, externalID))
+	db := getDB(ctx, r.client.db)
+	var user entity.User
+	if err := db.First(&user, "external_id = ?", externalID).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		span.RecordError(err)
+		return nil, fmt.Errorf("failed to get user by external id: %w", err)
+	}
+	return &user, nil
 }
 
 // Update 更新用户
@@ -117,26 +91,11 @@ func (r *UserRepository) Update(ctx context.Context, user *entity.User) error {
 	ctx, span := tracer.Start(ctx, "postgres.UserRepository.Update")
 	defer span.End()
 
-	q := getQuerier(ctx, r.client.db)
-
-	settingsJSON, _ := json.Marshal(user.Settings)
-
-	query := `
-		UPDATE users
-		SET name = $1, avatar_url = $2, role = $3, settings = $4, updated_at = NOW()
-		WHERE id = $5
-		RETURNING updated_at
-	`
-
-	err := q.QueryRowContext(ctx, query,
-		user.Name, user.AvatarURL, user.Role, settingsJSON, user.ID,
-	).Scan(&user.UpdatedAt)
-
-	if err != nil {
+	db := getDB(ctx, r.client.db)
+	if err := db.Save(user).Error; err != nil {
 		span.RecordError(err)
 		return fmt.Errorf("failed to update user: %w", err)
 	}
-
 	return nil
 }
 
@@ -145,16 +104,11 @@ func (r *UserRepository) Delete(ctx context.Context, id string) error {
 	ctx, span := tracer.Start(ctx, "postgres.UserRepository.Delete")
 	defer span.End()
 
-	q := getQuerier(ctx, r.client.db)
-
-	query := `DELETE FROM users WHERE id = $1`
-	_, err := q.ExecContext(ctx, query, id)
-
-	if err != nil {
+	db := getDB(ctx, r.client.db)
+	if err := db.Delete(&entity.User{}, "id = ?", id).Error; err != nil {
 		span.RecordError(err)
 		return fmt.Errorf("failed to delete user: %w", err)
 	}
-
 	return nil
 }
 
@@ -163,40 +117,24 @@ func (r *UserRepository) ListByTenant(ctx context.Context, tenantID string, pagi
 	ctx, span := tracer.Start(ctx, "postgres.UserRepository.ListByTenant")
 	defer span.End()
 
-	q := getQuerier(ctx, r.client.db)
+	db := getDB(ctx, r.client.db)
+	query := db.Model(&entity.User{}).Where("tenant_id = ?", tenantID)
 
 	// 获取总数
 	var total int64
-	countQuery := `SELECT COUNT(*) FROM users WHERE tenant_id = $1`
-	if err := q.QueryRowContext(ctx, countQuery, tenantID).Scan(&total); err != nil {
+	if err := query.Count(&total).Error; err != nil {
 		span.RecordError(err)
 		return nil, fmt.Errorf("failed to count users: %w", err)
 	}
 
 	// 获取列表
-	query := `
-		SELECT id, tenant_id, external_id, email, name, avatar_url, role, settings, last_login_at, created_at, updated_at
-		FROM users
-		WHERE tenant_id = $1
-		ORDER BY created_at DESC
-		LIMIT $2 OFFSET $3
-	`
-
-	rows, err := q.QueryContext(ctx, query, tenantID, pagination.Limit(), pagination.Offset())
-	if err != nil {
+	var users []*entity.User
+	if err := query.Order("created_at DESC").
+		Offset(pagination.Offset()).
+		Limit(pagination.Limit()).
+		Find(&users).Error; err != nil {
 		span.RecordError(err)
 		return nil, fmt.Errorf("failed to list users: %w", err)
-	}
-	defer rows.Close()
-
-	var users []*entity.User
-	for rows.Next() {
-		user, err := r.scanUserFromRows(rows)
-		if err != nil {
-			span.RecordError(err)
-			return nil, err
-		}
-		users = append(users, user)
 	}
 
 	return repository.NewPagedResult(users, total, pagination), nil
@@ -207,16 +145,11 @@ func (r *UserRepository) UpdateRole(ctx context.Context, id string, role entity.
 	ctx, span := tracer.Start(ctx, "postgres.UserRepository.UpdateRole")
 	defer span.End()
 
-	q := getQuerier(ctx, r.client.db)
-
-	query := `UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2`
-	_, err := q.ExecContext(ctx, query, role, id)
-
-	if err != nil {
+	db := getDB(ctx, r.client.db)
+	if err := db.Model(&entity.User{}).Where("id = ?", id).Update("role", role).Error; err != nil {
 		span.RecordError(err)
 		return fmt.Errorf("failed to update user role: %w", err)
 	}
-
 	return nil
 }
 
@@ -225,16 +158,12 @@ func (r *UserRepository) UpdateLastLogin(ctx context.Context, id string) error {
 	ctx, span := tracer.Start(ctx, "postgres.UserRepository.UpdateLastLogin")
 	defer span.End()
 
-	q := getQuerier(ctx, r.client.db)
-
-	query := `UPDATE users SET last_login_at = NOW(), updated_at = NOW() WHERE id = $1`
-	_, err := q.ExecContext(ctx, query, id)
-
-	if err != nil {
+	db := getDB(ctx, r.client.db)
+	now := time.Now()
+	if err := db.Model(&entity.User{}).Where("id = ?", id).Update("last_login_at", now).Error; err != nil {
 		span.RecordError(err)
 		return fmt.Errorf("failed to update last login: %w", err)
 	}
-
 	return nil
 }
 
@@ -243,88 +172,11 @@ func (r *UserRepository) ExistsByEmail(ctx context.Context, tenantID, email stri
 	ctx, span := tracer.Start(ctx, "postgres.UserRepository.ExistsByEmail")
 	defer span.End()
 
-	q := getQuerier(ctx, r.client.db)
-
-	var exists bool
-	query := `SELECT EXISTS(SELECT 1 FROM users WHERE tenant_id = $1 AND email = $2)`
-	err := q.QueryRowContext(ctx, query, tenantID, email).Scan(&exists)
-
-	if err != nil {
+	db := getDB(ctx, r.client.db)
+	var count int64
+	if err := db.Model(&entity.User{}).Where("tenant_id = ? AND email = ?", tenantID, email).Count(&count).Error; err != nil {
 		span.RecordError(err)
 		return false, fmt.Errorf("failed to check email exists: %w", err)
 	}
-
-	return exists, nil
-}
-
-// scanUser 扫描单行用户数据
-func (r *UserRepository) scanUser(row *sql.Row) (*entity.User, error) {
-	var user entity.User
-	var externalID, avatarURL, passwordHash sql.NullString
-	var lastLoginAt sql.NullTime
-	var settingsJSON []byte
-
-	err := row.Scan(
-		&user.ID, &user.TenantID, &externalID, &user.Email, &passwordHash, &user.Name,
-		&avatarURL, &user.Role, &settingsJSON, &lastLoginAt,
-		&user.CreatedAt, &user.UpdatedAt,
-	)
-
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("failed to scan user: %w", err)
-	}
-
-	if externalID.Valid {
-		user.ExternalID = externalID.String
-	}
-	if avatarURL.Valid {
-		user.AvatarURL = avatarURL.String
-	}
-	if passwordHash.Valid {
-		user.PasswordHash = passwordHash.String
-	}
-	if lastLoginAt.Valid {
-		user.LastLoginAt = &lastLoginAt.Time
-	}
-	json.Unmarshal(settingsJSON, &user.Settings)
-
-	return &user, nil
-}
-
-// scanUserFromRows 从多行结果扫描
-func (r *UserRepository) scanUserFromRows(rows *sql.Rows) (*entity.User, error) {
-	var user entity.User
-	var externalID, avatarURL, passwordHash sql.NullString
-	var lastLoginAt sql.NullTime
-	var settingsJSON []byte
-
-	err := rows.Scan(
-		&user.ID, &user.TenantID, &externalID, &user.Email, &passwordHash, &user.Name,
-		&avatarURL, &user.Role, &settingsJSON, &lastLoginAt,
-		&user.CreatedAt, &user.UpdatedAt,
-	)
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to scan user row: %w", err)
-	}
-
-	if externalID.Valid {
-		user.ExternalID = externalID.String
-	}
-	if avatarURL.Valid {
-		user.AvatarURL = avatarURL.String
-	}
-	if passwordHash.Valid {
-		user.PasswordHash = passwordHash.String
-	}
-	if lastLoginAt.Valid {
-		t := lastLoginAt.Time
-		user.LastLoginAt = &t
-	}
-	json.Unmarshal(settingsJSON, &user.Settings)
-
-	return &user, nil
+	return count > 0, nil
 }

@@ -25,18 +25,23 @@ type UserSettings struct {
 
 // User 用户实体
 type User struct {
-	ID           string        `json:"id"`
-	TenantID     string        `json:"tenant_id"`
-	ExternalID   string        `json:"external_id,omitempty"`
-	Email        string        `json:"email"`
-	PasswordHash string        `json:"-"` // 不在 JSON 中暴露
-	Name         string        `json:"name"`
-	AvatarURL    string        `json:"avatar_url,omitempty"`
-	Role         UserRole      `json:"role"`
-	Settings     *UserSettings `json:"settings,omitempty"`
+	ID           string        `json:"id" gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
+	TenantID     string        `json:"tenant_id" gorm:"type:uuid;index;not null"`
+	ExternalID   string        `json:"external_id,omitempty" gorm:"type:varchar(255)"`
+	Email        string        `json:"email" gorm:"type:varchar(255);uniqueIndex;not null"`
+	PasswordHash string        `json:"-" gorm:"column:password_hash"`
+	Name         string        `json:"name" gorm:"type:varchar(255);not null"`
+	AvatarURL    string        `json:"avatar_url,omitempty" gorm:"type:text"`
+	Role         UserRole      `json:"role" gorm:"type:varchar(50);default:'member'"`
+	Settings     *UserSettings `json:"settings,omitempty" gorm:"type:jsonb;serializer:json"`
 	LastLoginAt  *time.Time    `json:"last_login_at,omitempty"`
-	CreatedAt    time.Time     `json:"created_at"`
-	UpdatedAt    time.Time     `json:"updated_at"`
+	CreatedAt    time.Time     `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt    time.Time     `json:"updated_at" gorm:"autoUpdateTime"`
+}
+
+// TableName 指定表名
+func (User) TableName() string {
+	return "users"
 }
 
 // NewUser 创建新用户

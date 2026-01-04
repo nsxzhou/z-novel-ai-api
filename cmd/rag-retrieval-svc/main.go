@@ -47,10 +47,15 @@ func main() {
 	defer func() { _ = milvusClient.Close() }()
 
 	milvusRepo := milvus.NewRepository(milvusClient)
-	embedClient := embedding.NewClient(&cfg.Embedding)
+
+	// 使用 Eino Embedder
+	embedder, err := embedding.NewEinoEmbedder(ctx, &cfg.Embedding)
+	if err != nil {
+		logger.Fatal(ctx, "failed to init eino embedder", err)
+	}
 
 	if err := grpcserver.Run(ctx, cfg, func(s *grpc.Server) {
-		retrievalv1.RegisterRetrievalServiceServer(s, grpcserver.NewRetrievalService(embedClient, milvusRepo))
+		retrievalv1.RegisterRetrievalServiceServer(s, grpcserver.NewRetrievalService(embedder, milvusRepo))
 	}); err != nil {
 		logger.Fatal(ctx, "grpc server exited", err)
 	}

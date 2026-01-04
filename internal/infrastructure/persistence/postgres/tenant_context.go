@@ -19,8 +19,8 @@ func NewTenantContext(client *Client) *TenantContext {
 
 // SetTenant 设置当前租户上下文（用于 RLS）
 func (tc *TenantContext) SetTenant(ctx context.Context, tenantID string) error {
-	q := getQuerier(ctx, tc.client.db)
-	_, err := q.ExecContext(ctx, "SELECT set_config('app.current_tenant_id', $1, TRUE)", tenantID)
+	db := getDB(ctx, tc.client.db)
+	err := db.Exec("SELECT set_config('app.current_tenant_id', ?, TRUE)", tenantID).Error
 	if err != nil {
 		return fmt.Errorf("failed to set tenant context: %w", err)
 	}
@@ -29,9 +29,9 @@ func (tc *TenantContext) SetTenant(ctx context.Context, tenantID string) error {
 
 // GetCurrentTenant 获取当前租户 ID
 func (tc *TenantContext) GetCurrentTenant(ctx context.Context) (string, error) {
-	q := getQuerier(ctx, tc.client.db)
+	db := getDB(ctx, tc.client.db)
 	var tenantID sql.NullString
-	err := q.QueryRowContext(ctx, "SELECT current_setting('app.current_tenant_id', TRUE)").Scan(&tenantID)
+	err := db.Raw("SELECT current_setting('app.current_tenant_id', TRUE)").Scan(&tenantID).Error
 	if err != nil {
 		return "", fmt.Errorf("failed to get tenant context: %w", err)
 	}
@@ -40,8 +40,8 @@ func (tc *TenantContext) GetCurrentTenant(ctx context.Context) (string, error) {
 
 // ClearTenant 清除租户上下文
 func (tc *TenantContext) ClearTenant(ctx context.Context) error {
-	q := getQuerier(ctx, tc.client.db)
-	_, err := q.ExecContext(ctx, "SELECT set_config('app.current_tenant_id', '', TRUE)")
+	db := getDB(ctx, tc.client.db)
+	err := db.Exec("SELECT set_config('app.current_tenant_id', '', TRUE)").Error
 	if err != nil {
 		return fmt.Errorf("failed to clear tenant context: %w", err)
 	}

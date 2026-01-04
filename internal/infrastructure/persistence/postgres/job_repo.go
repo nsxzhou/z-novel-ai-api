@@ -3,20 +3,21 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
-	"encoding/json"
 	"fmt"
+	"time"
+
+	"gorm.io/gorm"
 
 	"z-novel-ai-api/internal/domain/entity"
 	"z-novel-ai-api/internal/domain/repository"
 )
 
-// JobRepository 生成任务仓储实现
+// JobRepository 任务仓储实现
 type JobRepository struct {
 	client *Client
 }
 
-// NewJobRepository 创建生成任务仓储
+// NewJobRepository 创建任务仓储
 func NewJobRepository(client *Client) *JobRepository {
 	return &JobRepository{client: client}
 }
@@ -26,33 +27,11 @@ func (r *JobRepository) Create(ctx context.Context, job *entity.GenerationJob) e
 	ctx, span := tracer.Start(ctx, "postgres.JobRepository.Create")
 	defer span.End()
 
-	q := getQuerier(ctx, r.client.db)
-
-	query := `
-		INSERT INTO generation_jobs (id, tenant_id, project_id, chapter_id, job_type, status, priority, 
-			input_params, output_result, error_message, llm_provider, llm_model, tokens_prompt, tokens_completion, 
-			duration_ms, retry_count, progress, idempotency_key, created_at, updated_at, started_at, completed_at)
-		VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW(), NOW(), $18, $19)
-		RETURNING id, created_at, updated_at
-	`
-
-	var chapterID sql.NullString
-	if job.ChapterID != "" {
-		chapterID = sql.NullString{String: job.ChapterID, Valid: true}
-	}
-
-	err := q.QueryRowContext(ctx, query,
-		job.TenantID, job.ProjectID, chapterID, job.JobType, job.Status, job.Priority,
-		job.InputParams, job.OutputResult, job.ErrorMessage, job.LLMProvider, job.LLMModel,
-		job.TokensPrompt, job.TokensComplete, job.DurationMs, job.RetryCount, job.Progress, job.IdempotencyKey,
-		job.StartedAt, job.CompletedAt,
-	).Scan(&job.ID, &job.CreatedAt, &job.UpdatedAt)
-
-	if err != nil {
+	db := getDB(ctx, r.client.db)
+	if err := db.Create(job).Error; err != nil {
 		span.RecordError(err)
 		return fmt.Errorf("failed to create job: %w", err)
 	}
-
 	return nil
 }
 
@@ -61,17 +40,16 @@ func (r *JobRepository) GetByID(ctx context.Context, id string) (*entity.Generat
 	ctx, span := tracer.Start(ctx, "postgres.JobRepository.GetByID")
 	defer span.End()
 
-	q := getQuerier(ctx, r.client.db)
-
-	query := `
-		SELECT id, tenant_id, project_id, chapter_id, job_type, status, priority, 
-			input_params, output_result, error_message, llm_provider, llm_model, tokens_prompt, tokens_completion, 
-			duration_ms, retry_count, progress, idempotency_key, created_at, updated_at, started_at, completed_at
-		FROM generation_jobs
-		WHERE id = $1
-	`
-
-	return r.scanJob(q.QueryRowContext(ctx, query, id))
+	db := getDB(ctx, r.client.db)
+	var job entity.GenerationJob
+	if err := db.First(&job, "id = ?", id).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		span.RecordError(err)
+		return nil, fmt.Errorf("failed to get job: %w", err)
+	}
+	return &job, nil
 }
 
 // Update 更新任务
@@ -79,28 +57,11 @@ func (r *JobRepository) Update(ctx context.Context, job *entity.GenerationJob) e
 	ctx, span := tracer.Start(ctx, "postgres.JobRepository.Update")
 	defer span.End()
 
-	q := getQuerier(ctx, r.client.db)
-
-	query := `
-		UPDATE generation_jobs
-		SET status = $1, output_result = $2, error_message = $3, llm_provider = $4, llm_model = $5, 
-			tokens_prompt = $6, tokens_completion = $7, duration_ms = $8, retry_count = $9, 
-			progress = $10, started_at = $11, completed_at = $12, updated_at = NOW()
-		WHERE id = $13
-		RETURNING updated_at
-	`
-
-	err := q.QueryRowContext(ctx, query,
-		job.Status, job.OutputResult, job.ErrorMessage, job.LLMProvider, job.LLMModel,
-		job.TokensPrompt, job.TokensComplete, job.DurationMs, job.RetryCount,
-		job.Progress, job.StartedAt, job.CompletedAt, job.ID,
-	).Scan(&job.UpdatedAt)
-
-	if err != nil {
+	db := getDB(ctx, r.client.db)
+	if err := db.Save(job).Error; err != nil {
 		span.RecordError(err)
 		return fmt.Errorf("failed to update job: %w", err)
 	}
-
 	return nil
 }
 
@@ -109,16 +70,11 @@ func (r *JobRepository) Delete(ctx context.Context, id string) error {
 	ctx, span := tracer.Start(ctx, "postgres.JobRepository.Delete")
 	defer span.End()
 
-	q := getQuerier(ctx, r.client.db)
-
-	query := `DELETE FROM generation_jobs WHERE id = $1`
-	_, err := q.ExecContext(ctx, query, id)
-
-	if err != nil {
+	db := getDB(ctx, r.client.db)
+	if err := db.Delete(&entity.GenerationJob{}, "id = ?", id).Error; err != nil {
 		span.RecordError(err)
 		return fmt.Errorf("failed to delete job: %w", err)
 	}
-
 	return nil
 }
 
@@ -127,67 +83,37 @@ func (r *JobRepository) ListByProject(ctx context.Context, projectID string, fil
 	ctx, span := tracer.Start(ctx, "postgres.JobRepository.ListByProject")
 	defer span.End()
 
-	q := getQuerier(ctx, r.client.db)
+	db := getDB(ctx, r.client.db)
+	query := db.Model(&entity.GenerationJob{}).Where("project_id = ?", projectID)
 
-	// 构建查询条件
-	whereClause := "project_id = $1"
-	args := []interface{}{projectID}
-	argIdx := 2
-
+	// 应用过滤条件
 	if filter != nil {
+		if filter.ChapterID != "" {
+			query = query.Where("chapter_id = ?", filter.ChapterID)
+		}
 		if filter.JobType != "" {
-			whereClause += fmt.Sprintf(" AND job_type = $%d", argIdx)
-			args = append(args, filter.JobType)
-			argIdx++
+			query = query.Where("job_type = ?", filter.JobType)
 		}
 		if filter.Status != "" {
-			whereClause += fmt.Sprintf(" AND status = $%d", argIdx)
-			args = append(args, filter.Status)
-			argIdx++
-		}
-		if filter.ChapterID != "" {
-			whereClause += fmt.Sprintf(" AND chapter_id = $%d", argIdx)
-			args = append(args, filter.ChapterID)
-			argIdx++
+			query = query.Where("status = ?", filter.Status)
 		}
 	}
 
 	// 获取总数
 	var total int64
-	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM generation_jobs WHERE %s`, whereClause)
-	if err := q.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := query.Count(&total).Error; err != nil {
 		span.RecordError(err)
 		return nil, fmt.Errorf("failed to count jobs: %w", err)
 	}
 
 	// 获取列表
-	query := fmt.Sprintf(`
-		SELECT id, tenant_id, project_id, chapter_id, job_type, status, priority, 
-			input_params, output_result, error_message, llm_provider, llm_model, tokens_prompt, tokens_completion, 
-			duration_ms, retry_count, progress, idempotency_key, created_at, updated_at, started_at, completed_at
-		FROM generation_jobs
-		WHERE %s
-		ORDER BY created_at DESC
-		LIMIT $%d OFFSET $%d
-	`, whereClause, argIdx, argIdx+1)
-
-	args = append(args, pagination.Limit(), pagination.Offset())
-
-	rows, err := q.QueryContext(ctx, query, args...)
-	if err != nil {
+	var jobs []*entity.GenerationJob
+	if err := query.Order("created_at DESC").
+		Offset(pagination.Offset()).
+		Limit(pagination.Limit()).
+		Find(&jobs).Error; err != nil {
 		span.RecordError(err)
 		return nil, fmt.Errorf("failed to list jobs: %w", err)
-	}
-	defer rows.Close()
-
-	var jobs []*entity.GenerationJob
-	for rows.Next() {
-		job, err := r.scanJobFromRows(rows)
-		if err != nil {
-			span.RecordError(err)
-			return nil, err
-		}
-		jobs = append(jobs, job)
 	}
 
 	return repository.NewPagedResult(jobs, total, pagination), nil
@@ -198,17 +124,16 @@ func (r *JobRepository) GetByIdempotencyKey(ctx context.Context, key string) (*e
 	ctx, span := tracer.Start(ctx, "postgres.JobRepository.GetByIdempotencyKey")
 	defer span.End()
 
-	q := getQuerier(ctx, r.client.db)
-
-	query := `
-		SELECT id, tenant_id, project_id, chapter_id, job_type, status, priority, 
-			input_params, output_result, error_message, llm_provider, llm_model, tokens_prompt, tokens_completion, 
-			duration_ms, retry_count, progress, idempotency_key, created_at, updated_at, started_at, completed_at
-		FROM generation_jobs
-		WHERE idempotency_key = $1
-	`
-
-	return r.scanJob(q.QueryRowContext(ctx, query, key))
+	db := getDB(ctx, r.client.db)
+	var job entity.GenerationJob
+	if err := db.First(&job, "idempotency_key = ?", key).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		span.RecordError(err)
+		return nil, fmt.Errorf("failed to get job by idempotency key: %w", err)
+	}
+	return &job, nil
 }
 
 // UpdateStatus 更新任务状态
@@ -216,55 +141,38 @@ func (r *JobRepository) UpdateStatus(ctx context.Context, id string, status enti
 	ctx, span := tracer.Start(ctx, "postgres.JobRepository.UpdateStatus")
 	defer span.End()
 
-	q := getQuerier(ctx, r.client.db)
-
-	query := `UPDATE generation_jobs SET status = $1 WHERE id = $2`
-	_, err := q.ExecContext(ctx, query, status, id)
-
-	if err != nil {
+	db := getDB(ctx, r.client.db)
+	if err := db.Model(&entity.GenerationJob{}).Where("id = ?", id).Update("status", status).Error; err != nil {
 		span.RecordError(err)
 		return fmt.Errorf("failed to update job status: %w", err)
 	}
-
 	return nil
 }
 
-// MarkRunning 标记任务为运行中（设置 started_at）
+// MarkRunning 标记任务为运行中
 func (r *JobRepository) MarkRunning(ctx context.Context, id string) error {
 	ctx, span := tracer.Start(ctx, "postgres.JobRepository.MarkRunning")
 	defer span.End()
 
-	q := getQuerier(ctx, r.client.db)
-
-	query := `
-		UPDATE generation_jobs
-		SET status = 'running', started_at = NOW(), updated_at = NOW()
-		WHERE id = $1 AND status IN ('pending', 'failed')
-	`
-	_, err := q.ExecContext(ctx, query, id)
-	if err != nil {
+	db := getDB(ctx, r.client.db)
+	now := time.Now()
+	if err := db.Model(&entity.GenerationJob{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"status":     entity.JobStatusRunning,
+		"started_at": now,
+	}).Error; err != nil {
 		span.RecordError(err)
 		return fmt.Errorf("failed to mark job running: %w", err)
 	}
 	return nil
 }
 
-// UpdateProgress 更新任务进度（0-100）
+// UpdateProgress 更新任务进度
 func (r *JobRepository) UpdateProgress(ctx context.Context, id string, progress int) error {
 	ctx, span := tracer.Start(ctx, "postgres.JobRepository.UpdateProgress")
 	defer span.End()
 
-	if progress < 0 {
-		progress = 0
-	}
-	if progress > 100 {
-		progress = 100
-	}
-
-	q := getQuerier(ctx, r.client.db)
-	query := `UPDATE generation_jobs SET progress = $1, updated_at = NOW() WHERE id = $2`
-	_, err := q.ExecContext(ctx, query, progress, id)
-	if err != nil {
+	db := getDB(ctx, r.client.db)
+	if err := db.Model(&entity.GenerationJob{}).Where("id = ?", id).Update("progress", progress).Error; err != nil {
 		span.RecordError(err)
 		return fmt.Errorf("failed to update job progress: %w", err)
 	}
@@ -276,19 +184,18 @@ func (r *JobRepository) GetPendingJobs(ctx context.Context, limit int) ([]*entit
 	ctx, span := tracer.Start(ctx, "postgres.JobRepository.GetPendingJobs")
 	defer span.End()
 
-	q := getQuerier(ctx, r.client.db)
+	db := getDB(ctx, r.client.db)
+	var jobs []*entity.GenerationJob
 
-	query := `
-		SELECT id, tenant_id, project_id, chapter_id, job_type, status, priority, 
-			input_params, output_result, error_message, llm_provider, llm_model, tokens_prompt, tokens_completion, 
-			duration_ms, retry_count, progress, idempotency_key, created_at, updated_at, started_at, completed_at
-		FROM generation_jobs
-		WHERE status = 'pending'
-		ORDER BY priority DESC, created_at ASC
-		LIMIT $1
-	`
+	if err := db.Where("status = ?", entity.JobStatusPending).
+		Order("priority DESC, created_at ASC").
+		Limit(limit).
+		Find(&jobs).Error; err != nil {
+		span.RecordError(err)
+		return nil, fmt.Errorf("failed to get pending jobs: %w", err)
+	}
 
-	return r.queryJobs(ctx, q, query, limit)
+	return jobs, nil
 }
 
 // GetRunningJobs 获取运行中任务
@@ -296,18 +203,17 @@ func (r *JobRepository) GetRunningJobs(ctx context.Context) ([]*entity.Generatio
 	ctx, span := tracer.Start(ctx, "postgres.JobRepository.GetRunningJobs")
 	defer span.End()
 
-	q := getQuerier(ctx, r.client.db)
+	db := getDB(ctx, r.client.db)
+	var jobs []*entity.GenerationJob
 
-	query := `
-		SELECT id, tenant_id, project_id, chapter_id, job_type, status, priority, 
-			input_params, output_result, error_message, llm_provider, llm_model, tokens_prompt, tokens_completion, 
-			duration_ms, retry_count, progress, idempotency_key, created_at, updated_at, started_at, completed_at
-		FROM generation_jobs
-		WHERE status = 'running'
-		ORDER BY started_at ASC
-	`
+	if err := db.Where("status = ?", entity.JobStatusRunning).
+		Order("started_at ASC").
+		Find(&jobs).Error; err != nil {
+		span.RecordError(err)
+		return nil, fmt.Errorf("failed to get running jobs: %w", err)
+	}
 
-	return r.queryJobs(ctx, q, query)
+	return jobs, nil
 }
 
 // GetFailedJobs 获取失败任务（可重试）
@@ -315,19 +221,18 @@ func (r *JobRepository) GetFailedJobs(ctx context.Context, maxRetries int, limit
 	ctx, span := tracer.Start(ctx, "postgres.JobRepository.GetFailedJobs")
 	defer span.End()
 
-	q := getQuerier(ctx, r.client.db)
+	db := getDB(ctx, r.client.db)
+	var jobs []*entity.GenerationJob
 
-	query := `
-		SELECT id, tenant_id, project_id, chapter_id, job_type, status, priority, 
-			input_params, output_result, error_message, llm_provider, llm_model, tokens_prompt, tokens_completion, 
-			duration_ms, retry_count, progress, idempotency_key, created_at, updated_at, started_at, completed_at
-		FROM generation_jobs
-		WHERE status = 'failed' AND retry_count < $1
-		ORDER BY created_at ASC
-		LIMIT $2
-	`
+	if err := db.Where("status = ? AND retry_count < ?", entity.JobStatusFailed, maxRetries).
+		Order("created_at ASC").
+		Limit(limit).
+		Find(&jobs).Error; err != nil {
+		span.RecordError(err)
+		return nil, fmt.Errorf("failed to get failed jobs: %w", err)
+	}
 
-	return r.queryJobs(ctx, q, query, maxRetries, limit)
+	return jobs, nil
 }
 
 // IncrementRetryCount 增加重试次数
@@ -335,16 +240,12 @@ func (r *JobRepository) IncrementRetryCount(ctx context.Context, id string) erro
 	ctx, span := tracer.Start(ctx, "postgres.JobRepository.IncrementRetryCount")
 	defer span.End()
 
-	q := getQuerier(ctx, r.client.db)
-
-	query := `UPDATE generation_jobs SET retry_count = retry_count + 1, status = 'pending' WHERE id = $1`
-	_, err := q.ExecContext(ctx, query, id)
-
-	if err != nil {
+	db := getDB(ctx, r.client.db)
+	if err := db.Model(&entity.GenerationJob{}).Where("id = ?", id).
+		Update("retry_count", gorm.Expr("retry_count + 1")).Error; err != nil {
 		span.RecordError(err)
 		return fmt.Errorf("failed to increment retry count: %w", err)
 	}
-
 	return nil
 }
 
@@ -353,27 +254,24 @@ func (r *JobRepository) SetResult(ctx context.Context, id string, result []byte,
 	ctx, span := tracer.Start(ctx, "postgres.JobRepository.SetResult")
 	defer span.End()
 
-	q := getQuerier(ctx, r.client.db)
-
-	var status string
+	db := getDB(ctx, r.client.db)
+	now := time.Now()
+	updates := map[string]interface{}{
+		"completed_at": now,
+	}
+	if result != nil {
+		updates["output_result"] = result
+		updates["status"] = entity.JobStatusCompleted
+	}
 	if errMsg != "" {
-		status = "failed"
-	} else {
-		status = "completed"
+		updates["error_message"] = errMsg
+		updates["status"] = entity.JobStatusFailed
 	}
 
-	query := `
-		UPDATE generation_jobs 
-		SET status = $1, output_result = $2, error_message = $3, completed_at = NOW()
-		WHERE id = $4
-	`
-	_, err := q.ExecContext(ctx, query, status, result, errMsg, id)
-
-	if err != nil {
+	if err := db.Model(&entity.GenerationJob{}).Where("id = ?", id).Updates(updates).Error; err != nil {
 		span.RecordError(err)
-		return fmt.Errorf("failed to set result: %w", err)
+		return fmt.Errorf("failed to set job result: %w", err)
 	}
-
 	return nil
 }
 
@@ -382,125 +280,27 @@ func (r *JobRepository) GetJobStats(ctx context.Context, projectID string) (*rep
 	ctx, span := tracer.Start(ctx, "postgres.JobRepository.GetJobStats")
 	defer span.End()
 
-	q := getQuerier(ctx, r.client.db)
-
-	query := `
-		SELECT 
-			COUNT(*) as total_jobs,
-			COUNT(*) FILTER (WHERE status = 'pending') as pending_jobs,
-			COUNT(*) FILTER (WHERE status = 'running') as running_jobs,
-			COUNT(*) FILTER (WHERE status = 'completed') as completed_jobs,
-			COUNT(*) FILTER (WHERE status = 'failed') as failed_jobs,
-			COALESCE(SUM(tokens_prompt + tokens_completion), 0) as total_tokens_used
-		FROM generation_jobs
-		WHERE project_id = $1
-	`
-
+	db := getDB(ctx, r.client.db)
 	var stats repository.JobStats
-	err := q.QueryRowContext(ctx, query, projectID).Scan(
-		&stats.TotalJobs, &stats.PendingJobs, &stats.RunningJobs,
-		&stats.CompletedJobs, &stats.FailedJobs, &stats.TotalTokensUsed,
-	)
 
-	if err != nil {
-		span.RecordError(err)
-		return nil, fmt.Errorf("failed to get job stats: %w", err)
+	// 基础查询
+	baseQuery := db.Model(&entity.GenerationJob{}).Where("project_id = ?", projectID)
+
+	// 总任务数
+	baseQuery.Count(&stats.TotalJobs)
+
+	// 按状态统计
+	db.Model(&entity.GenerationJob{}).Where("project_id = ? AND status = ?", projectID, entity.JobStatusPending).Count(&stats.PendingJobs)
+	db.Model(&entity.GenerationJob{}).Where("project_id = ? AND status = ?", projectID, entity.JobStatusRunning).Count(&stats.RunningJobs)
+	db.Model(&entity.GenerationJob{}).Where("project_id = ? AND status = ?", projectID, entity.JobStatusCompleted).Count(&stats.CompletedJobs)
+	db.Model(&entity.GenerationJob{}).Where("project_id = ? AND status = ?", projectID, entity.JobStatusFailed).Count(&stats.FailedJobs)
+
+	// Token 使用统计
+	var tokensUsed *int64
+	db.Model(&entity.GenerationJob{}).Where("project_id = ?", projectID).Select("SUM(tokens_prompt + tokens_completion)").Scan(&tokensUsed)
+	if tokensUsed != nil {
+		stats.TotalTokensUsed = *tokensUsed
 	}
 
 	return &stats, nil
-}
-
-// queryJobs 通用查询任务
-func (r *JobRepository) queryJobs(ctx context.Context, q Querier, query string, args ...interface{}) ([]*entity.GenerationJob, error) {
-	rows, err := q.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query jobs: %w", err)
-	}
-	defer rows.Close()
-
-	var jobs []*entity.GenerationJob
-	for rows.Next() {
-		job, err := r.scanJobFromRows(rows)
-		if err != nil {
-			return nil, err
-		}
-		jobs = append(jobs, job)
-	}
-
-	return jobs, nil
-}
-
-// scanJob 扫描单行任务数据
-func (r *JobRepository) scanJob(row *sql.Row) (*entity.GenerationJob, error) {
-	var job entity.GenerationJob
-	var chapterID, idempotencyKey sql.NullString
-	var inputParams, outputResult json.RawMessage
-	var startedAt, completedAt sql.NullTime
-
-	err := row.Scan(
-		&job.ID, &job.TenantID, &job.ProjectID, &chapterID, &job.JobType, &job.Status, &job.Priority,
-		&inputParams, &outputResult, &job.ErrorMessage, &job.LLMProvider, &job.LLMModel,
-		&job.TokensPrompt, &job.TokensComplete, &job.DurationMs, &job.RetryCount, &job.Progress, &idempotencyKey,
-		&job.CreatedAt, &job.UpdatedAt, &startedAt, &completedAt,
-	)
-
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("failed to scan job: %w", err)
-	}
-
-	if chapterID.Valid {
-		job.ChapterID = chapterID.String
-	}
-	if idempotencyKey.Valid {
-		job.IdempotencyKey = idempotencyKey.String
-	}
-	if startedAt.Valid {
-		job.StartedAt = &startedAt.Time
-	}
-	if completedAt.Valid {
-		job.CompletedAt = &completedAt.Time
-	}
-	job.InputParams = inputParams
-	job.OutputResult = outputResult
-
-	return &job, nil
-}
-
-// scanJobFromRows 从多行结果扫描
-func (r *JobRepository) scanJobFromRows(rows *sql.Rows) (*entity.GenerationJob, error) {
-	var job entity.GenerationJob
-	var chapterID, idempotencyKey sql.NullString
-	var inputParams, outputResult json.RawMessage
-	var startedAt, completedAt sql.NullTime
-
-	err := rows.Scan(
-		&job.ID, &job.TenantID, &job.ProjectID, &chapterID, &job.JobType, &job.Status, &job.Priority,
-		&inputParams, &outputResult, &job.ErrorMessage, &job.LLMProvider, &job.LLMModel,
-		&job.TokensPrompt, &job.TokensComplete, &job.DurationMs, &job.RetryCount, &job.Progress, &idempotencyKey,
-		&job.CreatedAt, &job.UpdatedAt, &startedAt, &completedAt,
-	)
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to scan job row: %w", err)
-	}
-
-	if chapterID.Valid {
-		job.ChapterID = chapterID.String
-	}
-	if idempotencyKey.Valid {
-		job.IdempotencyKey = idempotencyKey.String
-	}
-	if startedAt.Valid {
-		job.StartedAt = &startedAt.Time
-	}
-	if completedAt.Valid {
-		job.CompletedAt = &completedAt.Time
-	}
-	job.InputParams = inputParams
-	job.OutputResult = outputResult
-
-	return &job, nil
 }
