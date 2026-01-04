@@ -19,10 +19,21 @@ type TenantResponse struct {
 	UpdatedAt time.Time              `json:"updated_at"`
 }
 
+// CreateTenantRequest 创建租户请求
+type CreateTenantRequest struct {
+	Name string `json:"name" binding:"required,max=128"`
+	Slug string `json:"slug" binding:"required,max=64,alphanum"`
+}
+
 // UpdateTenantRequest 更新租户请求
 type UpdateTenantRequest struct {
 	Name     *string                `json:"name"`
 	Settings *entity.TenantSettings `json:"settings"`
+}
+
+// TenantListResponse 租户列表响应
+type TenantListResponse struct {
+	Items []*TenantResponse `json:"items"`
 }
 
 // ToTenantResponse 实体转换为响应

@@ -33,6 +33,11 @@ type UpdateUserRequest struct {
 	Settings  *entity.UserSettings `json:"settings"`
 }
 
+// UpdateUserRoleRequest 更新用户角色请求
+type UpdateUserRoleRequest struct {
+	Role entity.UserRole `json:"role" binding:"required,oneof=admin member viewer"`
+}
+
 // ToUserResponse 实体转换为响应
 func ToUserResponse(u *entity.User) *UserResponse {
 	if u == nil {

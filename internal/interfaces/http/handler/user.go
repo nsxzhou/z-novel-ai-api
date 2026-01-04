@@ -123,3 +123,37 @@ func (h *UserHandler) ListTenantUsers(c *gin.Context) {
 	meta := dto.NewPageMeta(pageReq.Page, pageReq.PageSize, int(result.Total))
 	dto.SuccessWithPage(c, resp, meta)
 }
+
+// UpdateUserRole 更新用户角色
+func (h *UserHandler) UpdateUserRole(c *gin.Context) {
+	ctx := c.Request.Context()
+	targetUserID := c.Param("id")
+
+	var req dto.UpdateUserRoleRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		dto.BadRequest(c, "invalid request body: "+err.Error())
+		return
+	}
+
+	if err := h.userRepo.UpdateRole(ctx, targetUserID, req.Role); err != nil {
+		logger.Error(ctx, "failed to update user role", err)
+		dto.InternalError(c, "failed to update user role")
+		return
+	}
+
+	dto.Success(c, gin.H{"message": "user role updated"})
+}
+
+// DeleteUser 删除用户
+func (h *UserHandler) DeleteUser(c *gin.Context) {
+	ctx := c.Request.Context()
+	targetUserID := c.Param("id")
+
+	if err := h.userRepo.Delete(ctx, targetUserID); err != nil {
+		logger.Error(ctx, "failed to delete user", err)
+		dto.InternalError(c, "failed to delete user")
+		return
+	}
+
+	dto.Success(c, gin.H{"message": "user deleted"})
+}

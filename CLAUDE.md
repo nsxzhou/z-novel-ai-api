@@ -9,9 +9,25 @@
 
 ---
 
-## 1. 当前仓库目标与运行模式（必须先看）
+## 1. 已完成的核心功能
 
-### 1.1 默认：CRUD-only（当前仓库默认）
+### 1.1 租户、认证与用户体系
+本任务已完整实现租户 (Tenant)、认证 (Auth) 和用户 (User) 模块的核心功能，建立了稳健的多租户隔离基础和精细化的权限管理机制。
+
+*   **多租户架构:** 基于 PostgreSQL RLS (Row Level Security) 实现强数据隔离。
+*   **认证机制:** 采用 JWT 双 Token 方案，Refresh Token 通过 `HttpOnly` Cookie 传递。
+*   **RBAC 权限控制:** 实现了静态的 RBAC0 模型，支持角色到权限的映射及显式的读写权限分离控制。
+*   **安全设计:** 注册流程默认关闭，需在租户设置中显式开启。所有认证和业务请求均需明确提供 `tenant_id`。
+*   **主要入口:**
+    *   Handlers: `internal/interfaces/http/handler/auth.go`, `user.go`, `tenant.go`
+    *   RLS 中间件: `internal/interfaces/http/middleware/db_transaction.go`
+    *   RBAC 中间件: `internal/interfaces/http/middleware/rbac.go`
+
+---
+
+## 2. 当前仓库目标与运行模式（必须先看）
+
+### 2.1 默认：CRUD-only（当前仓库默认）
 - 目标：基础 CRUD 接口可运行；生成/检索/流式等核心业务仅保留占位实现（HTTP 返回 501，gRPC 返回 Unimplemented）。
 - 开关：`features.core.enabled=false`
   - 配置文件：`configs/config.yaml`
@@ -115,7 +131,9 @@ z-novel-ai-api/
 - Events：`GET|POST /v1/projects/:pid/events`，`GET|PUT|DELETE /v1/events/:evid`
 - Relations：`GET|POST /v1/projects/:pid/relations`，`GET|PUT|DELETE /v1/relations/:rid`
 - Jobs（查询/取消/项目内列表）：`GET /v1/projects/:pid/jobs`，`GET /v1/jobs/:jid`，`DELETE /v1/jobs/:jid`
-- Users/Tenants（当前视角）：`GET|PUT /v1/users/me`，`GET /v1/users`，`GET|PUT /v1/tenants/current`
+- Auth: `POST /v1/auth/register`, `POST /v1/auth/login`, `POST /v1/auth/refresh`, `POST /v1/auth/logout`
+- Users: `GET|PUT /v1/users/me` (当前用户), `GET /v1/users` (租户下用户列表), `PUT|DELETE /v1/users/:id` (管理接口)
+- Tenants: `GET|PUT /v1/tenants/current` (当前租户), `GET|POST /v1/tenants` (管理接口)
 - System：`GET /health`，`GET /ready`，`GET /live`
 
 ### 4.2 占位：核心业务（统一 501）
@@ -158,3 +176,4 @@ JWT_SECRET="dev-secret" FEATURES_CORE_ENABLED=false go run ./cmd/api-gateway
 - `cmd/admin-svc`、`cmd/file-svc`：仅目录预留，暂无入口与实现。
 - `api/openapi`：为空目录，当前未提供 OpenAPI 产物。
 - `test/`：仅目录骨架，仓库无 `*_test.go` 用例。
+- **动态 RBAC**：当前权限模型为硬编码（静态），不支持通过 API 动态管理角色或权限，也无法查询权限列表供前端渲染。

@@ -2,6 +2,7 @@
 package handler
 
 import (
+	"z-novel-ai-api/internal/domain/entity"
 	"z-novel-ai-api/internal/domain/repository"
 	"z-novel-ai-api/internal/interfaces/http/dto"
 	"z-novel-ai-api/internal/interfaces/http/middleware"
@@ -94,4 +95,57 @@ func (h *TenantHandler) UpdateCurrentTenant(c *gin.Context) {
 
 	resp := dto.ToTenantResponse(tenant)
 	dto.Success(c, resp)
+}
+
+// ListTenants 获取租户列表
+func (h *TenantHandler) ListTenants(c *gin.Context) {
+	ctx := c.Request.Context()
+	pageReq := dto.BindPage(c)
+
+	result, err := h.tenantRepo.List(ctx, repository.NewPagination(pageReq.Page, pageReq.PageSize))
+	if err != nil {
+		logger.Error(ctx, "failed to list tenants", err)
+		dto.InternalError(c, "failed to list tenants")
+		return
+	}
+
+	items := make([]*dto.TenantResponse, len(result.Items))
+	for i, t := range result.Items {
+		items[i] = dto.ToTenantResponse(t)
+	}
+
+	meta := dto.NewPageMeta(pageReq.Page, pageReq.PageSize, int(result.Total))
+	dto.SuccessWithPage(c, &dto.TenantListResponse{Items: items}, meta)
+}
+
+// CreateTenant 创建新租户
+func (h *TenantHandler) CreateTenant(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	var req dto.CreateTenantRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		dto.BadRequest(c, "invalid request body: "+err.Error())
+		return
+	}
+
+	// 检查 Slug 唯一性
+	exists, err := h.tenantRepo.ExistsBySlug(ctx, req.Slug)
+	if err != nil {
+		logger.Error(ctx, "failed to check slug existence", err)
+		dto.InternalError(c, "failed to create tenant")
+		return
+	}
+	if exists {
+		dto.BadRequest(c, "tenant slug already exists")
+		return
+	}
+
+	tenant := entity.NewTenant(req.Name, req.Slug)
+	if err := h.tenantRepo.Create(ctx, tenant); err != nil {
+		logger.Error(ctx, "failed to create tenant", err)
+		dto.InternalError(c, "failed to create tenant")
+		return
+	}
+
+	dto.Created(c, dto.ToTenantResponse(tenant))
 }

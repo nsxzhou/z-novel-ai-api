@@ -23,8 +23,9 @@ type TenantQuota struct {
 
 // TenantSettings 租户设置
 type TenantSettings struct {
-	DefaultModel    string `json:"default_model,omitempty"`
-	DefaultLanguage string `json:"default_language,omitempty"`
+	DefaultModel            string `json:"default_model,omitempty"`
+	DefaultLanguage         string `json:"default_language,omitempty"`
+	AllowPublicRegistration bool   `json:"allow_public_registration,omitempty"`
 }
 
 // Tenant 租户实体

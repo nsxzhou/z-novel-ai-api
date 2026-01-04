@@ -55,10 +55,11 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	// 确定租户 ID
 	tenantID := req.TenantID
 	if tenantID == "" {
-		tenantID = "default-tenant"
+		dto.BadRequest(c, "tenant_id is required")
+		return
 	}
 
-	// 检查租户是否存在
+	// 检查租户是否存在及其注册策略
 	tenant, err := h.tenantRepo.GetByID(ctx, tenantID)
 	if err != nil {
 		logger.Error(ctx, "failed to check tenant", err)
@@ -67,6 +68,13 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	}
 	if tenant == nil {
 		dto.BadRequest(c, "tenant not found")
+		return
+	}
+
+	// 检查租户是否允许公开注册
+	if tenant.Settings == nil || !tenant.Settings.AllowPublicRegistration {
+		logger.Warn(ctx, "registration attempt on restricted tenant", "tenant_id", tenantID, "email", req.Email)
+		dto.Forbidden(c, "registration is not allowed for this tenant")
 		return
 	}
 
@@ -135,7 +143,8 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 	tenantID := req.TenantID
 	if tenantID == "" {
-		tenantID = "default-tenant"
+		dto.BadRequest(c, "tenant_id is required")
+		return
 	}
 
 	// 查询用户
@@ -153,7 +162,9 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	}
 
 	// 更新登录状态
-	_ = h.userRepo.UpdateLastLogin(ctx, user.ID)
+	if err := h.userRepo.UpdateLastLogin(ctx, user.ID); err != nil {
+		logger.Warn(ctx, "failed to update last login time", "error", err, "user_id", user.ID)
+	}
 
 	// 生成 Token
 	tokens, err := h.jwtManager.GenerateTokenPair(user.TenantID, user.ID, string(user.Role), 15*time.Minute, 7*24*time.Hour)
