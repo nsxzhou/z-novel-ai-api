@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/joho/godotenv"
 	"z-novel-ai-api/internal/config"
 	"z-novel-ai-api/internal/wire"
 	"z-novel-ai-api/pkg/logger"
@@ -23,6 +24,9 @@ var (
 )
 
 func main() {
+	// 加载 .env 文件（如果存在）
+	_ = godotenv.Load()
+
 	// 加载配置
 	cfg, err := config.Load()
 	if err != nil {

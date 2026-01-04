@@ -77,8 +77,8 @@ llm:
   providers:
     openai:
       api_key: "${OPENAI_API_KEY}" # 通过 Vault 注入
-      base_url: "https://api.openai.com/v1"
-      model: "gpt-4o"
+      base_url: "https://x666.me/v1"
+      model: "gemini-3-flash-preview"
       max_tokens: 8192
       temperature: 0.7
       timeout: 120s
