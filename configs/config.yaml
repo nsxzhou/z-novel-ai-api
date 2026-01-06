@@ -82,10 +82,10 @@ llm:
       max_tokens: 8192
       temperature: 0.7
       timeout: 120s
-    deepseek:
-      api_key: "${DEEPSEEK_API_KEY}" # 通过 Vault 注入
-      base_url: "https://api.deepseek.com"
-      model: "deepseek-chat"
+    hybgzs:
+      api_key: "${HYBGZS_API_KEY}" # 通过 Vault 注入
+      base_url: "https://ai.hybgzs.com/v1"
+      model: "hyb-Optimal/gemini-3-flash-preview"
       max_tokens: 8192
       temperature: 0.7
       timeout: 120s
