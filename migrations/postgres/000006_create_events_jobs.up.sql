@@ -3,18 +3,18 @@
 
 -- 事件表
 CREATE TABLE IF NOT EXISTS events (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    chapter_id UUID REFERENCES chapters(id) ON DELETE SET NULL,
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid (),
+    project_id UUID NOT NULL REFERENCES projects (id) ON DELETE CASCADE,
+    chapter_id UUID REFERENCES chapters (id) ON DELETE SET NULL,
     story_time_start BIGINT NOT NULL,
     story_time_end BIGINT,
     event_type VARCHAR(64),
     summary TEXT NOT NULL,
     description TEXT,
-    involved_entities UUID[],
-    location_id UUID REFERENCES entities(id),
+    involved_entities UUID [],
+    location_id UUID REFERENCES entities (id),
     importance VARCHAR(16) DEFAULT 'normal',
-    tags TEXT[],
+    tags TEXT [],
     vector_id VARCHAR(64),
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -74,7 +74,7 @@ CREATE INDEX IF NOT EXISTS idx_jobs_idempotency ON generation_jobs (idempotency_
 
 -- 审计日志表（分区表）
 CREATE TABLE IF NOT EXISTS audit_logs (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid (),
+    id UUID NOT NULL,
     tenant_id UUID NOT NULL,
     user_id UUID,
     action VARCHAR(64) NOT NULL,
@@ -86,7 +86,8 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     user_agent TEXT,
     changes JSONB,
     metadata JSONB,
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (id, created_at)
 )
 PARTITION BY
     RANGE (created_at);
