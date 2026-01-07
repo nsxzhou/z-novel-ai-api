@@ -118,19 +118,19 @@ func (r *EntityRepository) ListByProject(ctx context.Context, projectID string, 
 	return repository.NewPagedResult(entities, total, pagination), nil
 }
 
-// GetByName 根据名称获取实体
-func (r *EntityRepository) GetByName(ctx context.Context, projectID, name string) (*entity.StoryEntity, error) {
-	ctx, span := tracer.Start(ctx, "postgres.EntityRepository.GetByName")
+// GetByAIKey 根据 AIKey 获取实体（用于 AI 生成对象的稳定映射）
+func (r *EntityRepository) GetByAIKey(ctx context.Context, projectID, aiKey string) (*entity.StoryEntity, error) {
+	ctx, span := tracer.Start(ctx, "postgres.EntityRepository.GetByAIKey")
 	defer span.End()
 
 	db := getDB(ctx, r.client.db)
 	var ent entity.StoryEntity
-	if err := db.First(&ent, "project_id = ? AND name = ?", projectID, name).Error; err != nil {
+	if err := db.First(&ent, "project_id = ? AND ai_key = ?", projectID, aiKey).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, nil
 		}
 		span.RecordError(err)
-		return nil, fmt.Errorf("failed to get entity by name: %w", err)
+		return nil, fmt.Errorf("failed to get entity by ai_key: %w", err)
 	}
 	return &ent, nil
 }

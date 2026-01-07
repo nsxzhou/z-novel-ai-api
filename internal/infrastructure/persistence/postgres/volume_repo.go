@@ -4,6 +4,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"gorm.io/gorm"
 
@@ -111,6 +112,23 @@ func (r *VolumeRepository) GetByProjectAndSeq(ctx context.Context, projectID str
 	return &volume, nil
 }
 
+// GetByAIKey 根据 AIKey 获取卷（用于 AI 生成对象的稳定映射）
+func (r *VolumeRepository) GetByAIKey(ctx context.Context, projectID, aiKey string) (*entity.Volume, error) {
+	ctx, span := tracer.Start(ctx, "postgres.VolumeRepository.GetByAIKey")
+	defer span.End()
+
+	db := getDB(ctx, r.client.db)
+	var volume entity.Volume
+	if err := db.First(&volume, "project_id = ? AND ai_key = ?", projectID, aiKey).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		span.RecordError(err)
+		return nil, fmt.Errorf("failed to get volume by ai_key: %w", err)
+	}
+	return &volume, nil
+}
+
 // UpdateWordCount 更新卷字数
 func (r *VolumeRepository) UpdateWordCount(ctx context.Context, id string, wordCount int) error {
 	ctx, span := tracer.Start(ctx, "postgres.VolumeRepository.UpdateWordCount")
@@ -131,8 +149,54 @@ func (r *VolumeRepository) ReorderVolumes(ctx context.Context, projectID string,
 
 	db := getDB(ctx, r.client.db)
 
-	for i, id := range volumeIDs {
-		if err := db.Model(&entity.Volume{}).Where("id = ? AND project_id = ?", id, projectID).
+	var existing []*entity.Volume
+	if err := db.Model(&entity.Volume{}).
+		Select("id").
+		Where("project_id = ?", projectID).
+		Order("seq_num ASC").
+		Find(&existing).Error; err != nil {
+		span.RecordError(err)
+		return fmt.Errorf("failed to load volumes for reorder: %w", err)
+	}
+
+	seen := make(map[string]struct{}, len(existing))
+	order := make([]string, 0, len(existing))
+	for i := range volumeIDs {
+		id := strings.TrimSpace(volumeIDs[i])
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		order = append(order, id)
+	}
+	for i := range existing {
+		id := existing[i].ID
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		order = append(order, id)
+	}
+
+	if len(order) == 0 {
+		return nil
+	}
+
+	const offset = 1000000
+	if err := db.Model(&entity.Volume{}).
+		Where("project_id = ?", projectID).
+		Update("seq_num", gorm.Expr("seq_num + ?", offset)).Error; err != nil {
+		span.RecordError(err)
+		return fmt.Errorf("failed to bump seq_num for reorder: %w", err)
+	}
+
+	for i := range order {
+		id := order[i]
+		if err := db.Model(&entity.Volume{}).
+			Where("id = ? AND project_id = ?", id, projectID).
 			Update("seq_num", i+1).Error; err != nil {
 			span.RecordError(err)
 			return fmt.Errorf("failed to reorder volumes: %w", err)

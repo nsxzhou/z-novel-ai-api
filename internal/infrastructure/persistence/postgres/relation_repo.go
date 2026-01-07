@@ -132,6 +132,23 @@ func (r *RelationRepository) GetByEntities(ctx context.Context, projectID, sourc
 	return &relation, nil
 }
 
+// GetByEntitiesAndType 根据两个实体与关系类型获取关系
+func (r *RelationRepository) GetByEntitiesAndType(ctx context.Context, projectID, sourceID, targetID string, relationType entity.RelationType) (*entity.Relation, error) {
+	ctx, span := tracer.Start(ctx, "postgres.RelationRepository.GetByEntitiesAndType")
+	defer span.End()
+
+	db := getDB(ctx, r.client.db)
+	var relation entity.Relation
+	if err := db.First(&relation, "project_id = ? AND source_entity_id = ? AND target_entity_id = ? AND relation_type = ?", projectID, sourceID, targetID, relationType).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		span.RecordError(err)
+		return nil, fmt.Errorf("failed to get relation by entities and type: %w", err)
+	}
+	return &relation, nil
+}
+
 // ListBySourceEntity 获取源实体的关系列表
 func (r *RelationRepository) ListBySourceEntity(ctx context.Context, entityID string) ([]*entity.Relation, error) {
 	ctx, span := tracer.Start(ctx, "postgres.RelationRepository.ListBySourceEntity")

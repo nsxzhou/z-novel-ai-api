@@ -1,4 +1,4 @@
-// Package postgres 提供 PostgreSQL Repository 实现
+﻿// Package postgres 提供 PostgreSQL Repository 实现
 package postgres
 
 import (
@@ -88,8 +88,8 @@ func (r *JobRepository) ListByProject(ctx context.Context, projectID string, fil
 
 	// 应用过滤条件
 	if filter != nil {
-		if filter.ChapterID != "" {
-			query = query.Where("chapter_id = ?", filter.ChapterID)
+		if filter.ChapterID != nil {
+			query = query.Where("chapter_id = ?", *filter.ChapterID)
 		}
 		if filter.JobType != "" {
 			query = query.Where("job_type = ?", filter.JobType)
@@ -145,23 +145,6 @@ func (r *JobRepository) UpdateStatus(ctx context.Context, id string, status enti
 	if err := db.Model(&entity.GenerationJob{}).Where("id = ?", id).Update("status", status).Error; err != nil {
 		span.RecordError(err)
 		return fmt.Errorf("failed to update job status: %w", err)
-	}
-	return nil
-}
-
-// MarkRunning 标记任务为运行中
-func (r *JobRepository) MarkRunning(ctx context.Context, id string) error {
-	ctx, span := tracer.Start(ctx, "postgres.JobRepository.MarkRunning")
-	defer span.End()
-
-	db := getDB(ctx, r.client.db)
-	now := time.Now()
-	if err := db.Model(&entity.GenerationJob{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"status":     entity.JobStatusRunning,
-		"started_at": now,
-	}).Error; err != nil {
-		span.RecordError(err)
-		return fmt.Errorf("failed to mark job running: %w", err)
 	}
 	return nil
 }
@@ -235,46 +218,6 @@ func (r *JobRepository) GetFailedJobs(ctx context.Context, maxRetries int, limit
 	return jobs, nil
 }
 
-// IncrementRetryCount 增加重试次数
-func (r *JobRepository) IncrementRetryCount(ctx context.Context, id string) error {
-	ctx, span := tracer.Start(ctx, "postgres.JobRepository.IncrementRetryCount")
-	defer span.End()
-
-	db := getDB(ctx, r.client.db)
-	if err := db.Model(&entity.GenerationJob{}).Where("id = ?", id).
-		Update("retry_count", gorm.Expr("retry_count + 1")).Error; err != nil {
-		span.RecordError(err)
-		return fmt.Errorf("failed to increment retry count: %w", err)
-	}
-	return nil
-}
-
-// SetResult 设置任务结果
-func (r *JobRepository) SetResult(ctx context.Context, id string, result []byte, errMsg string) error {
-	ctx, span := tracer.Start(ctx, "postgres.JobRepository.SetResult")
-	defer span.End()
-
-	db := getDB(ctx, r.client.db)
-	now := time.Now()
-	updates := map[string]interface{}{
-		"completed_at": now,
-	}
-	if result != nil {
-		updates["output_result"] = result
-		updates["status"] = entity.JobStatusCompleted
-	}
-	if errMsg != "" {
-		updates["error_message"] = errMsg
-		updates["status"] = entity.JobStatusFailed
-	}
-
-	if err := db.Model(&entity.GenerationJob{}).Where("id = ?", id).Updates(updates).Error; err != nil {
-		span.RecordError(err)
-		return fmt.Errorf("failed to set job result: %w", err)
-	}
-	return nil
-}
-
 // GetJobStats 获取任务统计信息
 func (r *JobRepository) GetJobStats(ctx context.Context, projectID string) (*repository.JobStats, error) {
 	ctx, span := tracer.Start(ctx, "postgres.JobRepository.GetJobStats")
@@ -303,4 +246,23 @@ func (r *JobRepository) GetJobStats(ctx context.Context, projectID string) (*rep
 	}
 
 	return &stats, nil
+}
+
+// GetTokenUsage 获取租户在指定时间范围内的 Token 使用量（prompt + completion）
+func (r *JobRepository) GetTokenUsage(ctx context.Context, tenantID string, startInclusive, endExclusive time.Time) (int64, error) {
+	ctx, span := tracer.Start(ctx, "postgres.JobRepository.GetTokenUsage")
+	defer span.End()
+
+	db := getDB(ctx, r.client.db)
+
+	var total int64
+	if err := db.Model(&entity.GenerationJob{}).
+		Where("tenant_id = ? AND created_at >= ? AND created_at < ?", tenantID, startInclusive, endExclusive).
+		Select("COALESCE(SUM(COALESCE(tokens_prompt,0) + COALESCE(tokens_completion,0)),0)").
+		Scan(&total).Error; err != nil {
+		span.RecordError(err)
+		return 0, fmt.Errorf("failed to get token usage: %w", err)
+	}
+
+	return total, nil
 }

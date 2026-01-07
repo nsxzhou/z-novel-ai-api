@@ -4,6 +4,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"gorm.io/gorm"
 
@@ -156,6 +157,23 @@ func (r *ChapterRepository) GetByProjectAndSeq(ctx context.Context, projectID st
 	return &chapter, nil
 }
 
+// GetByAIKey 根据 AIKey 获取章节（用于 AI 生成对象的稳定映射）
+func (r *ChapterRepository) GetByAIKey(ctx context.Context, projectID, aiKey string) (*entity.Chapter, error) {
+	ctx, span := tracer.Start(ctx, "postgres.ChapterRepository.GetByAIKey")
+	defer span.End()
+
+	db := getDB(ctx, r.client.db)
+	var chapter entity.Chapter
+	if err := db.First(&chapter, "project_id = ? AND ai_key = ?", projectID, aiKey).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		span.RecordError(err)
+		return nil, fmt.Errorf("failed to get chapter by ai_key: %w", err)
+	}
+	return &chapter, nil
+}
+
 // UpdateContent 更新章节内容
 func (r *ChapterRepository) UpdateContent(ctx context.Context, id, content, summary string) error {
 	ctx, span := tracer.Start(ctx, "postgres.ChapterRepository.UpdateContent")
@@ -184,6 +202,70 @@ func (r *ChapterRepository) UpdateStatus(ctx context.Context, id string, status 
 		span.RecordError(err)
 		return fmt.Errorf("failed to update chapter status: %w", err)
 	}
+	return nil
+}
+
+// ReorderChapters 重新排序某一卷下的章节（按给定 ID 顺序；未包含的章节会追加到末尾）
+func (r *ChapterRepository) ReorderChapters(ctx context.Context, projectID, volumeID string, chapterIDs []string) error {
+	ctx, span := tracer.Start(ctx, "postgres.ChapterRepository.ReorderChapters")
+	defer span.End()
+
+	db := getDB(ctx, r.client.db)
+
+	var existing []*entity.Chapter
+	if err := db.Model(&entity.Chapter{}).
+		Select("id").
+		Where("project_id = ? AND volume_id = ?", projectID, volumeID).
+		Order("seq_num ASC").
+		Find(&existing).Error; err != nil {
+		span.RecordError(err)
+		return fmt.Errorf("failed to load chapters for reorder: %w", err)
+	}
+
+	seen := make(map[string]struct{}, len(existing))
+	order := make([]string, 0, len(existing))
+	for i := range chapterIDs {
+		id := strings.TrimSpace(chapterIDs[i])
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		order = append(order, id)
+	}
+	for i := range existing {
+		id := existing[i].ID
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		order = append(order, id)
+	}
+
+	if len(order) == 0 {
+		return nil
+	}
+
+	const offset = 1000000
+	if err := db.Model(&entity.Chapter{}).
+		Where("project_id = ? AND volume_id = ?", projectID, volumeID).
+		Update("seq_num", gorm.Expr("seq_num + ?", offset)).Error; err != nil {
+		span.RecordError(err)
+		return fmt.Errorf("failed to bump seq_num for reorder: %w", err)
+	}
+
+	for i := range order {
+		id := order[i]
+		if err := db.Model(&entity.Chapter{}).
+			Where("id = ? AND project_id = ? AND volume_id = ?", id, projectID, volumeID).
+			Update("seq_num", i+1).Error; err != nil {
+			span.RecordError(err)
+			return fmt.Errorf("failed to reorder chapters: %w", err)
+		}
+	}
+
 	return nil
 }
 
