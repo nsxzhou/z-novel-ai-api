@@ -35,8 +35,10 @@ func DBTransaction(tx repository.Transactor, tenantCtx repository.TenantContextM
 	}
 
 	return func(c *gin.Context) {
-		// SSE/长连接请求不应持有事务连接，避免占满连接池；此类请求由 Handler 自行做短事务读写。
-		if strings.HasSuffix(c.Request.URL.Path, "/stream") {
+		// SSE/长连接与同步预览不应持有事务连接，避免占满连接池；
+		// 这类请求由 Handler 自行做短事务读写（txMgr.WithTransaction + tenantCtx.SetTenant）。
+		path := c.Request.URL.Path
+		if strings.HasSuffix(path, "/stream") || strings.HasSuffix(path, "/foundation/preview") || strings.HasSuffix(path, "/messages") {
 			c.Next()
 			return
 		}
