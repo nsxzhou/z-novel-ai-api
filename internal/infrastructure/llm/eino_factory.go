@@ -14,7 +14,7 @@ import (
 // EinoFactory 管理多个 Eino ChatModel 客户端实例
 type EinoFactory struct {
 	config *config.LLMConfig
-	models map[string]model.ChatModel
+	models map[string]model.BaseChatModel
 	mu     sync.RWMutex
 }
 
@@ -22,12 +22,12 @@ type EinoFactory struct {
 func NewEinoFactory(cfg *config.Config) *EinoFactory {
 	return &EinoFactory{
 		config: &cfg.LLM,
-		models: make(map[string]model.ChatModel),
+		models: make(map[string]model.BaseChatModel),
 	}
 }
 
 // Get 获取指定名称的 ChatModel，如果未指定则返回默认客户端
-func (f *EinoFactory) Get(ctx context.Context, name string) (model.ChatModel, error) {
+func (f *EinoFactory) Get(ctx context.Context, name string) (model.BaseChatModel, error) {
 	if name == "" {
 		name = f.config.DefaultProvider
 	}
@@ -71,7 +71,7 @@ func (f *EinoFactory) Get(ctx context.Context, name string) (model.ChatModel, er
 }
 
 // Default 返回默认 ChatModel
-func (f *EinoFactory) Default(ctx context.Context) (model.ChatModel, error) {
+func (f *EinoFactory) Default(ctx context.Context) (model.BaseChatModel, error) {
 	return f.Get(ctx, "")
 }
 
