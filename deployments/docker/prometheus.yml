@@ -4,4 +4,4 @@ global:
 scrape_configs:
   - job_name: "z-novel-ai-api"
     static_configs:
-      - targets: ["host.docker.internal:9091"] # 假设 API 服务在宿主机运行
+      - targets: ["host.docker.internal:8080"] # 主 HTTP 服务（/metrics 端点）

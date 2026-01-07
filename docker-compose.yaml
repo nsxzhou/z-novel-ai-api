@@ -54,16 +54,36 @@ services:
       timeout: 5s
       retries: 5
 
-  # Jaeger - 分布式追踪
-  jaeger:
-    image: jaegertracing/all-in-one:latest
-    container_name: z-novel-jaeger
+  # Tempo - 分布式追踪后端
+  tempo:
+    image: grafana/tempo:latest
+    container_name: z-novel-tempo
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    volumes:
+      - ./deployments/docker/tempo.yaml:/etc/tempo/tempo.yaml
+      - tempo_data:/var/tempo
     ports:
-      - "16686:16686" # UI
       - "4317:4317" # OTLP gRPC
       - "4318:4318" # OTLP HTTP
+      - "3200:3200" # Tempo HTTP API
+
+  # Grafana - 统一可观测性看板
+  grafana:
+    image: grafana/grafana:latest
+    container_name: z-novel-grafana
+    ports:
+      - "3000:3000"
     environment:
-      COLLECTOR_OTLP_ENABLED: "true"
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./deployments/docker/grafana/provisioning:/etc/grafana/provisioning
+    depends_on:
+      - prometheus
+      - tempo
 
   # Prometheus - 指标监控
   prometheus:
@@ -110,6 +130,8 @@ volumes:
   minio_data:
   etcd_data:
   milvus_data:
+  tempo_data:
+  grafana_data:
 
 networks:
   default:
