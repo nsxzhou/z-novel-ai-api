@@ -60,7 +60,7 @@ func (l *RateLimiter) Allow(ctx context.Context, key string, limit int, window t
 		Score:  float64(now),
 		Member: fmt.Sprintf("%d", now),
 	})
-	l.client.rdb.Expire(ctx, key, window)
+	l.client.rdb.Expire(ctx, key, window*2)
 
 	span.SetAttributes(attribute.Bool("ratelimit.allowed", true))
 	return true, nil
@@ -104,7 +104,7 @@ func (l *RateLimiter) AllowN(ctx context.Context, key string, limit, n int, wind
 			Member: fmt.Sprintf("%d-%d", now, i),
 		})
 	}
-	pipe.Expire(ctx, key, window)
+	pipe.Expire(ctx, key, window*2)
 
 	_, err = pipe.Exec(ctx)
 	if err != nil {
