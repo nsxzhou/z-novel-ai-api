@@ -96,7 +96,7 @@ var (
 			Name:      "tokens_used_total",
 			Help:      "Total tokens used for LLM calls",
 		},
-		[]string{"provider", "model", "type"}, // type: prompt/completion
+		[]string{"workflow", "provider", "model", "type"}, // type: prompt/completion
 	)
 
 	LLMCallDuration = promauto.NewHistogramVec(
@@ -107,7 +107,7 @@ var (
 			Help:      "LLM call duration in seconds",
 			Buckets:   []float64{1, 5, 10, 30, 60, 120},
 		},
-		[]string{"provider", "model"},
+		[]string{"workflow", "provider", "model"},
 	)
 
 	LLMCallTotal = promauto.NewCounterVec(
@@ -117,7 +117,29 @@ var (
 			Name:      "call_total",
 			Help:      "Total number of LLM calls",
 		},
-		[]string{"provider", "model", "status"},
+		[]string{"workflow", "provider", "model", "status"},
+	)
+
+	// Tool 指标（ToolCalling / ToolsNode）
+	ToolCallDuration = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: namespace,
+			Subsystem: "tool",
+			Name:      "call_duration_seconds",
+			Help:      "Tool call duration in seconds",
+			Buckets:   []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10},
+		},
+		[]string{"workflow", "tool"},
+	)
+
+	ToolCallTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: "tool",
+			Name:      "call_total",
+			Help:      "Total number of tool calls",
+		},
+		[]string{"workflow", "tool", "status"},
 	)
 
 	// 向量检索指标
