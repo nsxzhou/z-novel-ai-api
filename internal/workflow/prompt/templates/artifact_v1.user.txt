@@ -1,0 +1,15 @@
+项目标题：{project_title}
+
+项目简介：
+{project_description}
+
+任务：{artifact_type}
+
+用户需求：
+{prompt}
+
+{attachments_block}
+
+提示：如需查看当前设定，请调用工具 `artifact_get_active` 或 `artifact_search` 获取相关 JSON 片段或完整内容，再输出“完整新版本 JSON”。
+
+{current_hint}

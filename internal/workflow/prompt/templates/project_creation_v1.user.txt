@@ -1,0 +1,9 @@
+当前阶段：{stage}
+
+当前草稿（draft JSON）：
+{draft_json}
+
+用户输入：
+{prompt}
+
+{attachments_block}

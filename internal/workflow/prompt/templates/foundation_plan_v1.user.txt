@@ -1,0 +1,9 @@
+项目标题：{project_title}
+
+项目简介：
+{project_description}
+
+用户需求：
+{prompt}
+
+{attachments_block}
