@@ -16,6 +16,10 @@ func RegisterV1Routes(
 	volumeHandler *handler.VolumeHandler,
 	chapterHandler *handler.ChapterHandler,
 	entityHandler *handler.EntityHandler,
+	foundationHandler *handler.FoundationHandler,
+	conversationHandler *handler.ConversationHandler,
+	projectCreationHandler *handler.ProjectCreationHandler,
+	artifactHandler *handler.ArtifactHandler,
 	jobHandler *handler.JobHandler,
 	retrievalHandler *handler.RetrievalHandler,
 	streamHandler *handler.StreamHandler,
@@ -63,6 +67,24 @@ func RegisterV1Routes(
 		// 章节生成（需要 chapter:generate 权限）
 		projects.POST("/:pid/chapters/generate", middleware.RequirePermission(middleware.PermChapterGenerate), chapterHandler.GenerateChapter)
 
+		// 设定集生成（一期：复用 chapter:generate；落库 apply 需要 project:write）
+		projects.POST("/:pid/foundation/preview", middleware.RequirePermission(middleware.PermChapterGenerate), foundationHandler.PreviewFoundation)
+		projects.GET("/:pid/foundation/stream", middleware.RequirePermission(middleware.PermChapterGenerate), foundationHandler.StreamFoundation)  // SSE (GET)
+		projects.POST("/:pid/foundation/stream", middleware.RequirePermission(middleware.PermChapterGenerate), foundationHandler.StreamFoundation) // SSE (POST)
+		projects.POST("/:pid/foundation/generate", middleware.RequirePermission(middleware.PermChapterGenerate), foundationHandler.GenerateFoundation)
+		projects.POST("/:pid/foundation/apply", middleware.RequirePermission(middleware.PermProjectWrite), foundationHandler.ApplyFoundation)
+
+		// 长期会话（按任务切换生成构件版本；写操作需要 project:write）
+		projects.POST("/:pid/sessions", middleware.RequirePermission(middleware.PermProjectWrite), conversationHandler.CreateSession)
+		projects.GET("/:pid/sessions/:sid", middleware.RequirePermission(middleware.PermProjectRead), conversationHandler.GetSession)
+		projects.GET("/:pid/sessions/:sid/turns", middleware.RequirePermission(middleware.PermProjectRead), conversationHandler.ListTurns)
+		projects.POST("/:pid/sessions/:sid/messages", middleware.RequirePermission(middleware.PermProjectWrite), conversationHandler.SendMessage)
+
+		// 构件版本（读：project:read；回滚：project:write）
+		projects.GET("/:pid/artifacts", middleware.RequirePermission(middleware.PermProjectRead), artifactHandler.ListArtifacts)
+		projects.GET("/:pid/artifacts/:aid/versions", middleware.RequirePermission(middleware.PermProjectRead), artifactHandler.ListVersions)
+		projects.POST("/:pid/artifacts/:aid/rollback", middleware.RequirePermission(middleware.PermProjectWrite), artifactHandler.Rollback)
+
 		// 实体写操作
 		projects.POST("/:pid/entities", middleware.RequirePermission(middleware.PermProjectWrite), entityHandler.CreateEntity)
 
@@ -71,6 +93,15 @@ func RegisterV1Routes(
 
 		// 关系写操作
 		projects.POST("/:pid/relations", middleware.RequirePermission(middleware.PermProjectWrite), relationHandler.CreateRelation)
+	}
+
+	// 对话创建项目（Project 未存在时的会话）
+	projectCreation := v1.Group("/project-creation-sessions")
+	{
+		projectCreation.POST("", middleware.RequirePermission(middleware.PermProjectWrite), projectCreationHandler.CreateSession)
+		projectCreation.POST("/:sid/messages", middleware.RequirePermission(middleware.PermProjectWrite), projectCreationHandler.SendMessage)
+		projectCreation.GET("/:sid", middleware.RequirePermission(middleware.PermProjectRead), projectCreationHandler.GetSession)
+		projectCreation.GET("/:sid/turns", middleware.RequirePermission(middleware.PermProjectRead), projectCreationHandler.ListTurns)
 	}
 
 	// 事件管理
