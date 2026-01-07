@@ -33,6 +33,9 @@ type RelationRepository interface {
 	// GetByEntities 根据实体对获取关系
 	GetByEntities(ctx context.Context, projectID, sourceID, targetID string) (*entity.Relation, error)
 
+	// GetByEntitiesAndType 根据实体对与关系类型获取关系
+	GetByEntitiesAndType(ctx context.Context, projectID, sourceID, targetID string, relationType entity.RelationType) (*entity.Relation, error)
+
 	// ListBySourceEntity 获取源实体的关系列表
 	ListBySourceEntity(ctx context.Context, entityID string) ([]*entity.Relation, error)
 

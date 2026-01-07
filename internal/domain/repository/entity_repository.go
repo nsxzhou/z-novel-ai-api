@@ -31,8 +31,8 @@ type EntityRepository interface {
 	// ListByProject 获取项目实体列表
 	ListByProject(ctx context.Context, projectID string, filter *EntityFilter, pagination Pagination) (*PagedResult[*entity.StoryEntity], error)
 
-	// GetByName 根据名称获取实体
-	GetByName(ctx context.Context, projectID, name string) (*entity.StoryEntity, error)
+	// GetByAIKey 根据 AIKey 获取实体（用于 AI 生成对象的稳定映射）
+	GetByAIKey(ctx context.Context, projectID, aiKey string) (*entity.StoryEntity, error)
 
 	// SearchByName 搜索实体名称（支持别名）
 	SearchByName(ctx context.Context, projectID, query string, limit int) ([]*entity.StoryEntity, error)

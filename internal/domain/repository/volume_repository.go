@@ -27,6 +27,9 @@ type VolumeRepository interface {
 	// GetByProjectAndSeq 根据项目和序号获取卷
 	GetByProjectAndSeq(ctx context.Context, projectID string, seqNum int) (*entity.Volume, error)
 
+	// GetByAIKey 根据 AIKey 获取卷（用于 AI 生成对象的稳定映射）
+	GetByAIKey(ctx context.Context, projectID, aiKey string) (*entity.Volume, error)
+
 	// UpdateWordCount 更新字数统计
 	UpdateWordCount(ctx context.Context, id string, wordCount int) error
 

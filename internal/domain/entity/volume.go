@@ -18,6 +18,7 @@ const (
 type Volume struct {
 	ID          string       `json:"id" gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
 	ProjectID   string       `json:"project_id" gorm:"type:uuid;index;not null"`
+	AIKey       string       `json:"ai_key,omitempty" gorm:"column:ai_key;type:varchar(128);index"`
 	SeqNum      int          `json:"seq_num" gorm:"not null"`
 	Title       string       `json:"title,omitempty" gorm:"type:varchar(255)"`
 	Description string       `json:"description,omitempty" gorm:"type:text"`

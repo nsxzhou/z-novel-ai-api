@@ -36,11 +36,17 @@ type ChapterRepository interface {
 	// GetByProjectAndSeq 根据项目和序号获取章节
 	GetByProjectAndSeq(ctx context.Context, projectID string, volumeID string, seqNum int) (*entity.Chapter, error)
 
+	// GetByAIKey 根据 AIKey 获取章节（用于 AI 生成对象的稳定映射）
+	GetByAIKey(ctx context.Context, projectID, aiKey string) (*entity.Chapter, error)
+
 	// UpdateContent 更新章节内容
 	UpdateContent(ctx context.Context, id, content, summary string) error
 
 	// UpdateStatus 更新章节状态
 	UpdateStatus(ctx context.Context, id string, status entity.ChapterStatus) error
+
+	// ReorderChapters 重新排序某一卷下的章节（按给定 ID 顺序；未包含的章节会追加到末尾）
+	ReorderChapters(ctx context.Context, projectID, volumeID string, chapterIDs []string) error
 
 	// GetNextSeqNum 获取下一个序号
 	GetNextSeqNum(ctx context.Context, projectID, volumeID string) (int, error)

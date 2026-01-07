@@ -1,4 +1,4 @@
-// Package entity 定义领域实体
+﻿// Package entity 定义领域实体
 package entity
 
 import (
@@ -11,6 +11,8 @@ type JobType string
 
 const (
 	JobTypeChapterGen    JobType = "chapter_gen"
+	JobTypeFoundationGen JobType = "foundation_gen"
+	JobTypeArtifactGen   JobType = "artifact_gen"
 	JobTypeSummary       JobType = "summary"
 	JobTypeEntityExtract JobType = "entity_extract"
 	JobTypeEmbeddingGen  JobType = "embedding_gen"
@@ -33,8 +35,8 @@ type GenerationJob struct {
 	ID             string          `json:"id" gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
 	TenantID       string          `json:"tenant_id" gorm:"type:uuid;index;not null"`
 	ProjectID      string          `json:"project_id" gorm:"type:uuid;index;not null"`
-	ChapterID      string          `json:"chapter_id,omitempty" gorm:"type:uuid;index"`
-	JobType        JobType         `json:"job_type" gorm:"type:varchar(50);not null"`
+	ChapterID      *string         `json:"chapter_id,omitempty" gorm:"type:uuid;index"`
+	JobType        JobType         `json:"job_type" gorm:"type:varchar(50);not null;"`
 	Status         JobStatus       `json:"status" gorm:"type:varchar(50);default:'pending';index"`
 	Priority       int             `json:"priority" gorm:"default:5"`
 	InputParams    json.RawMessage `json:"input_params" gorm:"type:jsonb"`
@@ -47,7 +49,7 @@ type GenerationJob struct {
 	DurationMs     int             `json:"duration_ms,omitempty"`
 	RetryCount     int             `json:"retry_count" gorm:"default:0"`
 	Progress       int             `json:"progress" gorm:"default:0"`
-	IdempotencyKey string          `json:"idempotency_key,omitempty" gorm:"type:varchar(255);uniqueIndex"`
+	IdempotencyKey *string         `json:"idempotency_key,omitempty" gorm:"type:varchar(255);uniqueIndex"`
 	CreatedAt      time.Time       `json:"created_at" gorm:"autoCreateTime"`
 	UpdatedAt      time.Time       `json:"updated_at" gorm:"autoUpdateTime"`
 	StartedAt      *time.Time      `json:"started_at,omitempty"`
@@ -75,40 +77,70 @@ func NewGenerationJob(tenantID, projectID string, jobType JobType, inputParams j
 
 // Start 开始执行任务
 func (j *GenerationJob) Start() {
+	if j == nil {
+		return
+	}
 	now := time.Now()
+	isRetry := j.Status == JobStatusFailed
+	if isRetry {
+		j.RetryCount++
+	}
 	j.Status = JobStatusRunning
 	j.StartedAt = &now
+	j.CompletedAt = nil
+	j.DurationMs = 0
+	j.ErrorMessage = ""
+	if isRetry {
+		j.OutputResult = nil
+	}
+	j.Progress = 0
 }
 
 // Complete 完成任务
 func (j *GenerationJob) Complete(result json.RawMessage) {
+	if j == nil {
+		return
+	}
 	now := time.Now()
 	j.Status = JobStatusCompleted
 	j.OutputResult = result
+	j.ErrorMessage = ""
 	j.CompletedAt = &now
 	if j.StartedAt != nil {
 		j.DurationMs = int(now.Sub(*j.StartedAt).Milliseconds())
 	}
+	j.UpdateProgress(100)
 }
 
 // Fail 任务失败
 func (j *GenerationJob) Fail(errMsg string) {
+	if j == nil {
+		return
+	}
 	now := time.Now()
 	j.Status = JobStatusFailed
 	j.ErrorMessage = errMsg
+	j.OutputResult = nil
 	j.CompletedAt = &now
 	if j.StartedAt != nil {
 		j.DurationMs = int(now.Sub(*j.StartedAt).Milliseconds())
 	}
+	j.UpdateProgress(100)
 }
 
 // Retry 重试任务
 func (j *GenerationJob) Retry() {
+	if j == nil {
+		return
+	}
 	j.RetryCount++
 	j.Status = JobStatusPending
 	j.StartedAt = nil
 	j.CompletedAt = nil
 	j.ErrorMessage = ""
+	j.OutputResult = nil
+	j.DurationMs = 0
+	j.Progress = 0
 }
 
 // CanRetry 检查是否可以重试

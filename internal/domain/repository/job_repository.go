@@ -1,8 +1,9 @@
-// Package repository 定义数据访问层接口
+﻿// Package repository 定义数据访问层接口
 package repository
 
 import (
 	"context"
+	"time"
 
 	"z-novel-ai-api/internal/domain/entity"
 )
@@ -11,7 +12,7 @@ import (
 type JobFilter struct {
 	JobType   entity.JobType
 	Status    entity.JobStatus
-	ChapterID string
+	ChapterID *string
 }
 
 // JobRepository 生成任务仓储接口
@@ -37,9 +38,6 @@ type JobRepository interface {
 	// UpdateStatus 更新任务状态
 	UpdateStatus(ctx context.Context, id string, status entity.JobStatus) error
 
-	// MarkRunning 标记任务为运行中（设置 started_at）
-	MarkRunning(ctx context.Context, id string) error
-
 	// UpdateProgress 更新任务进度（0-100）
 	UpdateProgress(ctx context.Context, id string, progress int) error
 
@@ -52,14 +50,11 @@ type JobRepository interface {
 	// GetFailedJobs 获取失败任务（可重试）
 	GetFailedJobs(ctx context.Context, maxRetries int, limit int) ([]*entity.GenerationJob, error)
 
-	// IncrementRetryCount 增加重试次数
-	IncrementRetryCount(ctx context.Context, id string) error
-
-	// SetResult 设置任务结果
-	SetResult(ctx context.Context, id string, result []byte, err string) error
-
 	// GetJobStats 获取任务统计信息
 	GetJobStats(ctx context.Context, projectID string) (*JobStats, error)
+
+	// GetTokenUsage 获取租户在指定时间范围内的 Token 使用量（prompt + completion）
+	GetTokenUsage(ctx context.Context, tenantID string, startInclusive, endExclusive time.Time) (int64, error)
 }
 
 // JobStats 任务统计信息

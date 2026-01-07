@@ -82,6 +82,7 @@ func (m *StringMap) Scan(value interface{}) error {
 type StoryEntity struct {
 	ID                   string            `json:"id" gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
 	ProjectID            string            `json:"project_id" gorm:"type:uuid;index;not null"`
+	AIKey                string            `json:"ai_key,omitempty" gorm:"column:ai_key;type:varchar(128);index"`
 	Name                 string            `json:"name" gorm:"type:varchar(255);not null"`
 	Aliases              StringSlice       `json:"aliases,omitempty" gorm:"type:jsonb"`
 	Type                 StoryEntityType   `json:"type" gorm:"type:varchar(50);not null"`

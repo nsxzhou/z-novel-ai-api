@@ -10,6 +10,7 @@ type ProjectStatus string
 
 const (
 	ProjectStatusDraft     ProjectStatus = "draft"
+	ProjectStatusActive    ProjectStatus = "active"
 	ProjectStatusWriting   ProjectStatus = "writing"
 	ProjectStatusCompleted ProjectStatus = "completed"
 	ProjectStatusArchived  ProjectStatus = "archived"
