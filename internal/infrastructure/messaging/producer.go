@@ -1,4 +1,4 @@
-// Package messaging 提供消息队列实现
+﻿// Package messaging 提供消息队列实现
 package messaging
 
 import (
@@ -10,6 +10,8 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
+
+	"z-novel-ai-api/pkg/logger"
 )
 
 var tracer = otel.Tracer("messaging")
@@ -40,6 +42,8 @@ func (p *Producer) Publish(ctx context.Context, stream Stream, msg *Message) (st
 			attribute.String("message.type", msg.Type),
 		))
 	defer span.End()
+
+	attachContextMetadata(ctx, msg)
 
 	data, err := json.Marshal(msg)
 	if err != nil {
@@ -73,8 +77,23 @@ func (p *Producer) PublishGenJob(ctx context.Context, job *GenerationJobMessage)
 	}
 
 	msg.SetMetadata("priority", fmt.Sprintf("%d", job.Priority))
-	if job.IdempotencyKey != "" {
-		msg.SetMetadata("idempotency_key", job.IdempotencyKey)
+	if job.IdempotencyKey != nil {
+		msg.SetMetadata("idempotency_key", *job.IdempotencyKey)
+	}
+
+	return p.Publish(ctx, StreamStoryGen, msg)
+}
+
+// PublishFoundationJob 发布设定集生成任务
+func (p *Producer) PublishFoundationJob(ctx context.Context, job *GenerationJobMessage) (string, error) {
+	msg, err := NewMessage(job.JobID, "foundation_gen", job.TenantID, job.ProjectID, job)
+	if err != nil {
+		return "", err
+	}
+
+	msg.SetMetadata("priority", fmt.Sprintf("%d", job.Priority))
+	if job.IdempotencyKey != nil {
+		msg.SetMetadata("idempotency_key", *job.IdempotencyKey)
 	}
 
 	return p.Publish(ctx, StreamStoryGen, msg)
@@ -106,10 +125,10 @@ type GenerationJobMessage struct {
 	JobID          string                 `json:"job_id"`
 	TenantID       string                 `json:"tenant_id"`
 	ProjectID      string                 `json:"project_id"`
-	ChapterID      string                 `json:"chapter_id,omitempty"`
+	ChapterID      *string                `json:"chapter_id,omitempty"`
 	JobType        string                 `json:"job_type"`
 	Priority       int                    `json:"priority"`
-	IdempotencyKey string                 `json:"idempotency_key,omitempty"`
+	IdempotencyKey *string                `json:"idempotency_key,omitempty"`
 	Params         map[string]interface{} `json:"params"`
 }
 
@@ -136,4 +155,27 @@ type AuditLogMessage struct {
 	UserAgent    string                 `json:"user_agent,omitempty"`
 	Changes      map[string]interface{} `json:"changes,omitempty"`
 	Metadata     map[string]interface{} `json:"metadata,omitempty"`
+}
+
+func attachContextMetadata(ctx context.Context, msg *Message) {
+	if msg == nil {
+		return
+	}
+	if msg.Metadata == nil {
+		msg.Metadata = make(map[string]string)
+	}
+	if _, ok := msg.Metadata["request_id"]; !ok {
+		if v := ctx.Value(logger.RequestIDKey); v != nil {
+			if s, ok := v.(string); ok && s != "" {
+				msg.Metadata["request_id"] = s
+			}
+		}
+	}
+	if _, ok := msg.Metadata["trace_id"]; !ok {
+		if v := ctx.Value(logger.TraceIDKey); v != nil {
+			if s, ok := v.(string); ok && s != "" {
+				msg.Metadata["trace_id"] = s
+			}
+		}
+	}
 }

@@ -20,13 +20,15 @@ type MessageHandler func(ctx context.Context, msg *Message) error
 
 // Consumer 消息消费者
 type Consumer struct {
-	client       *redis.Client
-	stream       Stream
-	group        ConsumerGroup
-	consumerName string
-	blockTimeout time.Duration
-	retryLimit   int
-	backoff      BackoffConfig
+	client        *redis.Client
+	stream        Stream
+	group         ConsumerGroup
+	consumerName  string
+	blockTimeout  time.Duration
+	claimInterval time.Duration
+	reclaimIdle   time.Duration
+	retryLimit    int
+	backoff       BackoffConfig
 
 	handlers map[string]MessageHandler
 	mu       sync.RWMutex
@@ -36,18 +38,22 @@ type Consumer struct {
 
 // ConsumerConfig 消费者配置
 type ConsumerConfig struct {
-	Stream       Stream
-	Group        ConsumerGroup
-	ConsumerName string
-	BlockTimeout time.Duration
-	RetryLimit   int
-	Backoff      BackoffConfig
+	Stream        Stream
+	Group         ConsumerGroup
+	ConsumerName  string
+	BlockTimeout  time.Duration
+	ClaimInterval time.Duration
+	RetryLimit    int
+	Backoff       BackoffConfig
 }
 
 // NewConsumer 创建消息消费者
 func NewConsumer(client *redis.Client, cfg ConsumerConfig) *Consumer {
 	if cfg.BlockTimeout <= 0 {
 		cfg.BlockTimeout = 5 * time.Second
+	}
+	if cfg.ClaimInterval <= 0 {
+		cfg.ClaimInterval = 30 * time.Second
 	}
 	if cfg.RetryLimit <= 0 {
 		cfg.RetryLimit = 3
@@ -57,15 +63,17 @@ func NewConsumer(client *redis.Client, cfg ConsumerConfig) *Consumer {
 	}
 
 	return &Consumer{
-		client:       client,
-		stream:       cfg.Stream,
-		group:        cfg.Group,
-		consumerName: cfg.ConsumerName,
-		blockTimeout: cfg.BlockTimeout,
-		retryLimit:   cfg.RetryLimit,
-		backoff:      cfg.Backoff,
-		handlers:     make(map[string]MessageHandler),
-		stopCh:       make(chan struct{}),
+		client:        client,
+		stream:        cfg.Stream,
+		group:         cfg.Group,
+		consumerName:  cfg.ConsumerName,
+		blockTimeout:  cfg.BlockTimeout,
+		claimInterval: cfg.ClaimInterval,
+		reclaimIdle:   maxDuration(5*time.Minute, cfg.Backoff.Max*2),
+		retryLimit:    cfg.RetryLimit,
+		backoff:       cfg.Backoff,
+		handlers:      make(map[string]MessageHandler),
+		stopCh:        make(chan struct{}),
 	}
 }
 
@@ -115,6 +123,8 @@ func (c *Consumer) run(ctx context.Context) {
 		"consumer", c.consumerName,
 	)
 
+	lastClaim := time.Now().Add(-c.claimInterval)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -124,6 +134,12 @@ func (c *Consumer) run(ctx context.Context) {
 			log.Info("consumer stopped")
 			return
 		default:
+		}
+
+		c.processDuePending(ctx)
+		if time.Since(lastClaim) >= c.claimInterval {
+			c.reclaimStale(ctx)
+			lastClaim = time.Now()
 		}
 
 		// 读取消息
@@ -161,26 +177,42 @@ func (c *Consumer) processMessage(ctx context.Context, xmsg redis.XMessage) {
 		))
 	defer span.End()
 
-	log := logger.FromContext(ctx)
-
 	// 解析消息
 	var msg Message
 	dataStr, ok := xmsg.Values["data"].(string)
 	if !ok {
-		log.Error("invalid message format", "message_id", xmsg.ID)
+		logger.FromContext(ctx).Error("invalid message format", "message_id", xmsg.ID)
 		c.ack(ctx, xmsg.ID)
 		return
 	}
 
 	if err := json.Unmarshal([]byte(dataStr), &msg); err != nil {
-		log.Error("failed to unmarshal message", "error", err, "message_id", xmsg.ID)
+		logger.FromContext(ctx).Error("failed to unmarshal message", "error", err, "message_id", xmsg.ID)
 		c.ack(ctx, xmsg.ID)
 		return
 	}
 
+	// 注入日志上下文（便于观测：tenant_id/project_id/request_id）
+	if msg.TenantID != "" {
+		ctx = logger.WithContext(ctx, logger.TenantIDKey, msg.TenantID)
+	}
+	if msg.ProjectID != "" {
+		ctx = logger.WithContext(ctx, logger.ProjectIDKey, msg.ProjectID)
+	}
+	if reqID := msg.GetMetadata("request_id"); reqID != "" {
+		ctx = logger.WithContext(ctx, logger.RequestIDKey, reqID)
+	}
+	if traceID := msg.GetMetadata("trace_id"); traceID != "" {
+		ctx = logger.WithContext(ctx, logger.TraceIDKey, traceID)
+	}
+
+	log := logger.FromContext(ctx)
+
 	span.SetAttributes(
 		attribute.String("message.id", msg.ID),
 		attribute.String("message.type", msg.Type),
+		attribute.String("tenant_id", msg.TenantID),
+		attribute.String("project_id", msg.ProjectID),
 	)
 
 	// 查找处理器
@@ -229,25 +261,10 @@ func (c *Consumer) handleFailure(ctx context.Context, xmsg redis.XMessage, msg *
 		c.ack(ctx, xmsg.ID)
 		return
 	}
-
-	// 计算退避时间
-	backoff := c.backoff.CalculateBackoff(retryCount)
-	log.Info("scheduling message retry",
+	log.Info("message left pending for retry",
 		"message_id", msg.ID,
-		"retry_count", retryCount+1,
-		"backoff", backoff,
+		"retry_count", retryCount,
 	)
-
-	// 延迟重试
-	time.AfterFunc(backoff, func() {
-		c.client.XClaim(context.Background(), &redis.XClaimArgs{
-			Stream:   string(c.stream),
-			Group:    string(c.group),
-			Consumer: c.consumerName,
-			MinIdle:  0,
-			Messages: []string{xmsg.ID},
-		})
-	})
 }
 
 // getRetryCount 获取重试次数
@@ -284,6 +301,164 @@ func (c *Consumer) moveToDLQ(ctx context.Context, msg *Message, err error) {
 		Stream: dlqStream,
 		Values: map[string]interface{}{"data": string(data)},
 	})
+}
+
+func (c *Consumer) processDuePending(ctx context.Context) {
+	pending, err := c.client.XPendingExt(ctx, &redis.XPendingExtArgs{
+		Stream:   string(c.stream),
+		Group:    string(c.group),
+		Start:    "-",
+		End:      "+",
+		Count:    20,
+		Consumer: c.consumerName,
+	}).Result()
+	if err != nil {
+		if err == redis.Nil {
+			return
+		}
+		logger.FromContext(ctx).Error("failed to query pending messages", "error", err)
+		return
+	}
+
+	for i := range pending {
+		p := pending[i]
+		retryCount := int(p.RetryCount)
+		if retryCount >= c.retryLimit {
+			claimed, claimErr := c.client.XClaim(ctx, &redis.XClaimArgs{
+				Stream:   string(c.stream),
+				Group:    string(c.group),
+				Consumer: c.consumerName,
+				MinIdle:  0,
+				Messages: []string{p.ID},
+			}).Result()
+			if claimErr != nil {
+				logger.FromContext(ctx).Error("failed to claim pending message for DLQ", "error", claimErr, "message_id", p.ID)
+				continue
+			}
+
+			for _, xmsg := range claimed {
+				raw, ok := xmsg.Values["data"].(string)
+				if !ok {
+					c.ack(ctx, xmsg.ID)
+					continue
+				}
+
+				var msg Message
+				if unmarshalErr := json.Unmarshal([]byte(raw), &msg); unmarshalErr != nil {
+					c.ack(ctx, xmsg.ID)
+					continue
+				}
+
+				c.moveToDLQ(ctx, &msg, fmt.Errorf("message exceeded max retries"))
+				c.ack(ctx, xmsg.ID)
+			}
+			continue
+		}
+
+		backoff := c.backoff.CalculateBackoff(retryCount)
+		if p.Idle < backoff {
+			continue
+		}
+
+		claimed, claimErr := c.client.XClaim(ctx, &redis.XClaimArgs{
+			Stream:   string(c.stream),
+			Group:    string(c.group),
+			Consumer: c.consumerName,
+			MinIdle:  backoff,
+			Messages: []string{p.ID},
+		}).Result()
+		if claimErr != nil {
+			logger.FromContext(ctx).Error("failed to claim pending message", "error", claimErr, "message_id", p.ID)
+			continue
+		}
+
+		for _, xmsg := range claimed {
+			c.processMessage(ctx, xmsg)
+		}
+	}
+}
+
+func (c *Consumer) reclaimStale(ctx context.Context) {
+	if c.reclaimIdle <= 0 {
+		return
+	}
+
+	pending, err := c.client.XPendingExt(ctx, &redis.XPendingExtArgs{
+		Stream: string(c.stream),
+		Group:  string(c.group),
+		Start:  "-",
+		End:    "+",
+		Count:  20,
+	}).Result()
+	if err != nil {
+		if err == redis.Nil {
+			return
+		}
+		logger.FromContext(ctx).Error("failed to query pending messages for reclaim", "error", err)
+		return
+	}
+
+	for i := range pending {
+		p := pending[i]
+		if p.Consumer == c.consumerName {
+			continue
+		}
+		if p.Idle < c.reclaimIdle {
+			continue
+		}
+		if int(p.RetryCount) >= c.retryLimit {
+			claimed, claimErr := c.client.XClaim(ctx, &redis.XClaimArgs{
+				Stream:   string(c.stream),
+				Group:    string(c.group),
+				Consumer: c.consumerName,
+				MinIdle:  c.reclaimIdle,
+				Messages: []string{p.ID},
+			}).Result()
+			if claimErr != nil {
+				logger.FromContext(ctx).Error("failed to claim stale message for DLQ", "error", claimErr, "message_id", p.ID)
+				continue
+			}
+			for _, xmsg := range claimed {
+				raw, ok := xmsg.Values["data"].(string)
+				if !ok {
+					c.ack(ctx, xmsg.ID)
+					continue
+				}
+
+				var msg Message
+				if unmarshalErr := json.Unmarshal([]byte(raw), &msg); unmarshalErr != nil {
+					c.ack(ctx, xmsg.ID)
+					continue
+				}
+				c.moveToDLQ(ctx, &msg, fmt.Errorf("message exceeded max retries"))
+				c.ack(ctx, xmsg.ID)
+			}
+			continue
+		}
+
+		claimed, claimErr := c.client.XClaim(ctx, &redis.XClaimArgs{
+			Stream:   string(c.stream),
+			Group:    string(c.group),
+			Consumer: c.consumerName,
+			MinIdle:  c.reclaimIdle,
+			Messages: []string{p.ID},
+		}).Result()
+		if claimErr != nil {
+			logger.FromContext(ctx).Error("failed to reclaim pending message", "error", claimErr, "message_id", p.ID)
+			continue
+		}
+
+		for _, xmsg := range claimed {
+			c.processMessage(ctx, xmsg)
+		}
+	}
+}
+
+func maxDuration(a, b time.Duration) time.Duration {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // MonitorDLQ 监控死信队列
