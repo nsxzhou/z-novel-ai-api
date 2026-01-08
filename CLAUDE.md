@@ -1,6 +1,6 @@
 # z-novel-ai-api（后端）— 当前状态与目录结构
 
-更新时间：2026-01-06
+更新时间：2026-01-07
 
 本文档面向"维护/二次开发"，目标是让你在 1 分钟内明确：
 
@@ -79,6 +79,16 @@
   - `GET|POST /v1/projects/:pid/foundation/stream`
   - `POST /v1/projects/:pid/foundation/generate`（支持 `Idempotency-Key`）
   - `POST /v1/projects/:pid/foundation/apply`
+
+#### 1.2.4 Eino 编排升级（Chain / Graph / ToolCalling / ChatTemplate / Callback）— **新增**
+
+在不改变现有 API 与数据结构的前提下，将设定生成链路升级为可组合、可观测、可扩展的 Eino 工作流：
+
+- Prompt 统一管理（go:embed ChatTemplate）：`internal/workflow/prompt/*`
+- Foundation / ProjectCreation：Chain 重构主路径（Prompt → LLM → Parse → Validate → Normalize）
+- Artifact：Graph + ToolCalling（ReAct 回路）按需获取上下文
+- 可观测性：Eino 全局 callbacks + Prometheus 指标：`internal/observability/eino/*`
+- 安全：ProjectCreation 增加服务端“确定性确认门控”，避免模型幻觉触发误创建
 
 ---
 
