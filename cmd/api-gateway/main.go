@@ -10,11 +10,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/joho/godotenv"
 	"z-novel-ai-api/internal/config"
+	einoobs "z-novel-ai-api/internal/observability/eino"
 	"z-novel-ai-api/internal/wire"
 	"z-novel-ai-api/pkg/logger"
 	"z-novel-ai-api/pkg/tracer"
+
+	"github.com/joho/godotenv"
 )
 
 // Version 版本信息，构建时注入
@@ -64,6 +66,9 @@ func main() {
 			log.Error("failed to shutdown tracer", "error", err)
 		}
 	}()
+
+	// 初始化 Eino 全局 callbacks（指标/追踪/日志）
+	einoobs.Init()
 
 	// 初始化应用（使用 Wire 注入）
 	app, cleanupApp, err := wire.InitializeApp(ctx, cfg)

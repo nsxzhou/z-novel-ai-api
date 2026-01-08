@@ -9,8 +9,11 @@ package wire
 import (
 	"context"
 	"github.com/google/wire"
+	"z-novel-ai-api/internal/application/quota"
+	"z-novel-ai-api/internal/application/story"
 	"z-novel-ai-api/internal/config"
 	"z-novel-ai-api/internal/domain/repository"
+	"z-novel-ai-api/internal/infrastructure/llm"
 	"z-novel-ai-api/internal/infrastructure/messaging"
 	"z-novel-ai-api/internal/infrastructure/persistence/milvus"
 	"z-novel-ai-api/internal/infrastructure/persistence/postgres"
@@ -39,6 +42,12 @@ func InitializeDataLayer(ctx context.Context, cfg *config.Config) (*DataLayer, f
 	relationRepository := postgres.NewRelationRepository(client)
 	eventRepository := postgres.NewEventRepository(client)
 	jobRepository := postgres.NewJobRepository(client)
+	llmUsageEventRepository := postgres.NewLLMUsageEventRepository(client)
+	conversationSessionRepository := postgres.NewConversationSessionRepository(client)
+	conversationTurnRepository := postgres.NewConversationTurnRepository(client)
+	artifactRepository := postgres.NewArtifactRepository(client)
+	projectCreationSessionRepository := postgres.NewProjectCreationSessionRepository(client)
+	projectCreationTurnRepository := postgres.NewProjectCreationTurnRepository(client)
 	redisClient, cleanup2, err := ProvideRedisClient(cfg)
 	if err != nil {
 		cleanup()
@@ -67,6 +76,12 @@ func InitializeDataLayer(ctx context.Context, cfg *config.Config) (*DataLayer, f
 		RelationRepo:  relationRepository,
 		EventRepo:     eventRepository,
 		JobRepo:       jobRepository,
+		LLMUsageRepo:  llmUsageEventRepository,
+		SessionRepo:   conversationSessionRepository,
+		TurnRepo:      conversationTurnRepository,
+		ArtifactRepo:  artifactRepository,
+		PCSessionRepo: projectCreationSessionRepository,
+		PCTurnRepo:    projectCreationTurnRepository,
 		RedisClient:   redisClient,
 		Cache:         cache,
 		RateLimiter:   rateLimiter,
@@ -77,6 +92,54 @@ func InitializeDataLayer(ctx context.Context, cfg *config.Config) (*DataLayer, f
 	return dataLayer, func() {
 		cleanup3()
 		cleanup2()
+		cleanup()
+	}, nil
+}
+
+// InitializePostgresOnly 仅初始化 PostgreSQL 数据层（用于 bootstrap）
+func InitializePostgresOnly(ctx context.Context, cfg *config.Config) (*PostgresOnlyDataLayer, func(), error) {
+	client, cleanup, err := ProvidePostgresClient(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	txManager := postgres.NewTxManager(client)
+	tenantContext := postgres.NewTenantContext(client)
+	tenantRepository := postgres.NewTenantRepository(client)
+	userRepository := postgres.NewUserRepository(client)
+	projectRepository := postgres.NewProjectRepository(client)
+	volumeRepository := postgres.NewVolumeRepository(client)
+	chapterRepository := postgres.NewChapterRepository(client)
+	entityRepository := postgres.NewEntityRepository(client)
+	relationRepository := postgres.NewRelationRepository(client)
+	eventRepository := postgres.NewEventRepository(client)
+	jobRepository := postgres.NewJobRepository(client)
+	llmUsageEventRepository := postgres.NewLLMUsageEventRepository(client)
+	conversationSessionRepository := postgres.NewConversationSessionRepository(client)
+	conversationTurnRepository := postgres.NewConversationTurnRepository(client)
+	artifactRepository := postgres.NewArtifactRepository(client)
+	projectCreationSessionRepository := postgres.NewProjectCreationSessionRepository(client)
+	projectCreationTurnRepository := postgres.NewProjectCreationTurnRepository(client)
+	postgresOnlyDataLayer := &PostgresOnlyDataLayer{
+		PgClient:      client,
+		TxManager:     txManager,
+		TenantContext: tenantContext,
+		TenantRepo:    tenantRepository,
+		UserRepo:      userRepository,
+		ProjectRepo:   projectRepository,
+		VolumeRepo:    volumeRepository,
+		ChapterRepo:   chapterRepository,
+		EntityRepo:    entityRepository,
+		RelationRepo:  relationRepository,
+		EventRepo:     eventRepository,
+		JobRepo:       jobRepository,
+		LLMUsageRepo:  llmUsageEventRepository,
+		SessionRepo:   conversationSessionRepository,
+		TurnRepo:      conversationTurnRepository,
+		ArtifactRepo:  artifactRepository,
+		PCSessionRepo: projectCreationSessionRepository,
+		PCTurnRepo:    projectCreationTurnRepository,
+	}
+	return postgresOnlyDataLayer, func() {
 		cleanup()
 	}, nil
 }
@@ -108,6 +171,24 @@ func InitializeApp(ctx context.Context, cfg *config.Config) (*router.Router, fun
 	entityRepository := postgres.NewEntityRepository(client)
 	relationRepository := postgres.NewRelationRepository(client)
 	entityHandler := handler.NewEntityHandler(entityRepository, relationRepository)
+	txManager := postgres.NewTxManager(client)
+	tenantContext := postgres.NewTenantContext(client)
+	llmUsageEventRepository := postgres.NewLLMUsageEventRepository(client)
+	tokenQuotaChecker := quota.NewTokenQuotaChecker(jobRepository, llmUsageEventRepository)
+	einoFactory := llm.NewEinoFactory(cfg)
+	foundationGenerator := story.NewFoundationGenerator(einoFactory)
+	foundationApplier := story.NewFoundationApplier(projectRepository, entityRepository, relationRepository, volumeRepository, chapterRepository)
+	foundationHandler := handler.NewFoundationHandler(cfg, txManager, tenantContext, tenantRepository, projectRepository, jobRepository, producer, tokenQuotaChecker, foundationGenerator, foundationApplier)
+	conversationSessionRepository := postgres.NewConversationSessionRepository(client)
+	conversationTurnRepository := postgres.NewConversationTurnRepository(client)
+	artifactRepository := postgres.NewArtifactRepository(client)
+	artifactGenerator := story.NewArtifactGenerator(einoFactory)
+	conversationHandler := handler.NewConversationHandler(cfg, txManager, tenantContext, tenantRepository, projectRepository, jobRepository, conversationSessionRepository, conversationTurnRepository, artifactRepository, tokenQuotaChecker, artifactGenerator)
+	projectCreationSessionRepository := postgres.NewProjectCreationSessionRepository(client)
+	projectCreationTurnRepository := postgres.NewProjectCreationTurnRepository(client)
+	projectCreationGenerator := story.NewProjectCreationGenerator(einoFactory)
+	projectCreationHandler := handler.NewProjectCreationHandler(cfg, txManager, tenantContext, tenantRepository, projectRepository, conversationSessionRepository, projectCreationSessionRepository, projectCreationTurnRepository, jobRepository, llmUsageEventRepository, tokenQuotaChecker, projectCreationGenerator)
+	artifactHandler := handler.NewArtifactHandler(artifactRepository)
 	jobHandler := handler.NewJobHandler(jobRepository)
 	retrievalGRPCConn, cleanup3, err := ProvideRetrievalGRPCConn(ctx, cfg)
 	if err != nil {
@@ -117,8 +198,6 @@ func InitializeApp(ctx context.Context, cfg *config.Config) (*router.Router, fun
 	}
 	retrievalServiceClient := ProvideRetrievalGRPCClient(retrievalGRPCConn)
 	retrievalHandler := handler.NewRetrievalHandler(retrievalServiceClient)
-	txManager := postgres.NewTxManager(client)
-	tenantContext := postgres.NewTenantContext(client)
 	storyGenGRPCConn, cleanup4, err := ProvideStoryGenGRPCConn(ctx, cfg)
 	if err != nil {
 		cleanup3()
@@ -135,22 +214,26 @@ func InitializeApp(ctx context.Context, cfg *config.Config) (*router.Router, fun
 	relationHandler := handler.NewRelationHandler(relationRepository)
 	rateLimiter := redis.NewRateLimiter(redisClient)
 	routerHandlers := &router.RouterHandlers{
-		Auth:         authHandler,
-		Health:       healthHandler,
-		Project:      projectHandler,
-		Volume:       volumeHandler,
-		Chapter:      chapterHandler,
-		Entity:       entityHandler,
-		Job:          jobHandler,
-		Retrieval:    retrievalHandler,
-		Stream:       streamHandler,
-		User:         userHandler,
-		Tenant:       tenantHandler,
-		Event:        eventHandler,
-		Relation:     relationHandler,
-		RateLimiter:  rateLimiter,
-		Transactor:   txManager,
-		TenantCtxMgr: tenantContext,
+		Auth:            authHandler,
+		Health:          healthHandler,
+		Project:         projectHandler,
+		Volume:          volumeHandler,
+		Chapter:         chapterHandler,
+		Entity:          entityHandler,
+		Foundation:      foundationHandler,
+		Conversation:    conversationHandler,
+		ProjectCreation: projectCreationHandler,
+		Artifact:        artifactHandler,
+		Job:             jobHandler,
+		Retrieval:       retrievalHandler,
+		Stream:          streamHandler,
+		User:            userHandler,
+		Tenant:          tenantHandler,
+		Event:           eventHandler,
+		Relation:        relationHandler,
+		RateLimiter:     rateLimiter,
+		Transactor:      txManager,
+		TenantCtxMgr:    tenantContext,
 	}
 	routerRouter := router.NewWithDeps(cfg, routerHandlers)
 	return routerRouter, func() {
@@ -178,6 +261,12 @@ type DataLayer struct {
 	RelationRepo  *postgres.RelationRepository
 	EventRepo     *postgres.EventRepository
 	JobRepo       *postgres.JobRepository
+	LLMUsageRepo  *postgres.LLMUsageEventRepository
+	SessionRepo   *postgres.ConversationSessionRepository
+	TurnRepo      *postgres.ConversationTurnRepository
+	ArtifactRepo  *postgres.ArtifactRepository
+	PCSessionRepo *postgres.ProjectCreationSessionRepository
+	PCTurnRepo    *postgres.ProjectCreationTurnRepository
 
 	// Redis
 	RedisClient *redis.Client
@@ -192,9 +281,31 @@ type DataLayer struct {
 	VectorRepo   *milvus.Repository
 }
 
+// PostgresOnlyDataLayer 仅包含 PostgreSQL 的数据层（用于 bootstrap）
+type PostgresOnlyDataLayer struct {
+	PgClient      *postgres.Client
+	TxManager     *postgres.TxManager
+	TenantContext *postgres.TenantContext
+	TenantRepo    *postgres.TenantRepository
+	UserRepo      *postgres.UserRepository
+	ProjectRepo   *postgres.ProjectRepository
+	VolumeRepo    *postgres.VolumeRepository
+	ChapterRepo   *postgres.ChapterRepository
+	EntityRepo    *postgres.EntityRepository
+	RelationRepo  *postgres.RelationRepository
+	EventRepo     *postgres.EventRepository
+	JobRepo       *postgres.JobRepository
+	LLMUsageRepo  *postgres.LLMUsageEventRepository
+	SessionRepo   *postgres.ConversationSessionRepository
+	TurnRepo      *postgres.ConversationTurnRepository
+	ArtifactRepo  *postgres.ArtifactRepository
+	PCSessionRepo *postgres.ProjectCreationSessionRepository
+	PCTurnRepo    *postgres.ProjectCreationTurnRepository
+}
+
 // PostgresSet PostgreSQL 提供者集合
 var PostgresSet = wire.NewSet(
-	ProvidePostgresClient, postgres.NewTxManager, postgres.NewTenantContext, postgres.NewTenantRepository, postgres.NewUserRepository, postgres.NewProjectRepository, postgres.NewVolumeRepository, postgres.NewChapterRepository, postgres.NewEntityRepository, postgres.NewRelationRepository, postgres.NewEventRepository, postgres.NewJobRepository,
+	ProvidePostgresClient, postgres.NewTxManager, postgres.NewTenantContext, postgres.NewTenantRepository, postgres.NewUserRepository, postgres.NewProjectRepository, postgres.NewVolumeRepository, postgres.NewChapterRepository, postgres.NewEntityRepository, postgres.NewRelationRepository, postgres.NewEventRepository, postgres.NewJobRepository, postgres.NewLLMUsageEventRepository, postgres.NewConversationSessionRepository, postgres.NewConversationTurnRepository, postgres.NewArtifactRepository, postgres.NewProjectCreationSessionRepository, postgres.NewProjectCreationTurnRepository,
 )
 
 // RedisSet Redis 提供者集合
@@ -226,12 +337,12 @@ var GRPCClientsSet = wire.NewSet(
 
 // RouterSet 路由器提供者集合
 var RouterSet = wire.NewSet(
-	ProvideAuthConfig, handler.NewAuthHandler, handler.NewHealthHandler, handler.NewProjectHandler, handler.NewVolumeHandler, handler.NewChapterHandler, handler.NewEntityHandler, handler.NewJobHandler, handler.NewRetrievalHandler, handler.NewStreamHandler, handler.NewUserHandler, handler.NewTenantHandler, handler.NewEventHandler, handler.NewRelationHandler, wire.Struct(new(router.RouterHandlers), "*"), router.NewWithDeps,
+	ProvideAuthConfig, llm.NewEinoFactory, story.NewFoundationGenerator, story.NewArtifactGenerator, quota.NewTokenQuotaChecker, story.NewFoundationApplier, story.NewProjectCreationGenerator, handler.NewAuthHandler, handler.NewHealthHandler, handler.NewProjectHandler, handler.NewVolumeHandler, handler.NewChapterHandler, handler.NewEntityHandler, handler.NewFoundationHandler, handler.NewConversationHandler, handler.NewProjectCreationHandler, handler.NewArtifactHandler, handler.NewJobHandler, handler.NewRetrievalHandler, handler.NewStreamHandler, handler.NewUserHandler, handler.NewTenantHandler, handler.NewEventHandler, handler.NewRelationHandler, wire.Struct(new(router.RouterHandlers), "*"), router.NewWithDeps,
 )
 
 // RepoSet 整合了具体实现与接口绑定的集合
 var RepoSet = wire.NewSet(
-	PostgresSet, wire.Bind(new(repository.Transactor), new(*postgres.TxManager)), wire.Bind(new(repository.TenantContextManager), new(*postgres.TenantContext)), wire.Bind(new(repository.TenantRepository), new(*postgres.TenantRepository)), wire.Bind(new(repository.UserRepository), new(*postgres.UserRepository)), wire.Bind(new(repository.ProjectRepository), new(*postgres.ProjectRepository)), wire.Bind(new(repository.VolumeRepository), new(*postgres.VolumeRepository)), wire.Bind(new(repository.ChapterRepository), new(*postgres.ChapterRepository)), wire.Bind(new(repository.EntityRepository), new(*postgres.EntityRepository)), wire.Bind(new(repository.RelationRepository), new(*postgres.RelationRepository)), wire.Bind(new(repository.JobRepository), new(*postgres.JobRepository)), wire.Bind(new(repository.EventRepository), new(*postgres.EventRepository)),
+	PostgresSet, wire.Bind(new(repository.Transactor), new(*postgres.TxManager)), wire.Bind(new(repository.TenantContextManager), new(*postgres.TenantContext)), wire.Bind(new(repository.TenantRepository), new(*postgres.TenantRepository)), wire.Bind(new(repository.UserRepository), new(*postgres.UserRepository)), wire.Bind(new(repository.ProjectRepository), new(*postgres.ProjectRepository)), wire.Bind(new(repository.VolumeRepository), new(*postgres.VolumeRepository)), wire.Bind(new(repository.ChapterRepository), new(*postgres.ChapterRepository)), wire.Bind(new(repository.EntityRepository), new(*postgres.EntityRepository)), wire.Bind(new(repository.RelationRepository), new(*postgres.RelationRepository)), wire.Bind(new(repository.JobRepository), new(*postgres.JobRepository)), wire.Bind(new(repository.LLMUsageEventRepository), new(*postgres.LLMUsageEventRepository)), wire.Bind(new(repository.EventRepository), new(*postgres.EventRepository)), wire.Bind(new(repository.ConversationSessionRepository), new(*postgres.ConversationSessionRepository)), wire.Bind(new(repository.ConversationTurnRepository), new(*postgres.ConversationTurnRepository)), wire.Bind(new(repository.ArtifactRepository), new(*postgres.ArtifactRepository)), wire.Bind(new(repository.ProjectCreationSessionRepository), new(*postgres.ProjectCreationSessionRepository)), wire.Bind(new(repository.ProjectCreationTurnRepository), new(*postgres.ProjectCreationTurnRepository)),
 )
 
 // ProvidePostgresClient 提供 PostgreSQL 客户端

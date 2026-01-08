@@ -1,4 +1,4 @@
-//go:build wireinject
+﻿//go:build wireinject
 // +build wireinject
 
 // Package wire 提供依赖注入配置
@@ -9,8 +9,11 @@ import (
 
 	"github.com/google/wire"
 
+	"z-novel-ai-api/internal/application/quota"
+	"z-novel-ai-api/internal/application/story"
 	"z-novel-ai-api/internal/config"
 	"z-novel-ai-api/internal/domain/repository"
+	"z-novel-ai-api/internal/infrastructure/llm"
 	"z-novel-ai-api/internal/infrastructure/messaging"
 	"z-novel-ai-api/internal/infrastructure/persistence/milvus"
 	"z-novel-ai-api/internal/infrastructure/persistence/postgres"
@@ -35,6 +38,12 @@ type DataLayer struct {
 	RelationRepo  *postgres.RelationRepository
 	EventRepo     *postgres.EventRepository
 	JobRepo       *postgres.JobRepository
+	LLMUsageRepo  *postgres.LLMUsageEventRepository
+	SessionRepo   *postgres.ConversationSessionRepository
+	TurnRepo      *postgres.ConversationTurnRepository
+	ArtifactRepo  *postgres.ArtifactRepository
+	PCSessionRepo *postgres.ProjectCreationSessionRepository
+	PCTurnRepo    *postgres.ProjectCreationTurnRepository
 
 	// Redis
 	RedisClient *redis.Client
@@ -49,6 +58,28 @@ type DataLayer struct {
 	VectorRepo   *milvus.Repository
 }
 
+// PostgresOnlyDataLayer 仅包含 PostgreSQL 的数据层（用于 bootstrap）
+type PostgresOnlyDataLayer struct {
+	PgClient      *postgres.Client
+	TxManager     *postgres.TxManager
+	TenantContext *postgres.TenantContext
+	TenantRepo    *postgres.TenantRepository
+	UserRepo      *postgres.UserRepository
+	ProjectRepo   *postgres.ProjectRepository
+	VolumeRepo    *postgres.VolumeRepository
+	ChapterRepo   *postgres.ChapterRepository
+	EntityRepo    *postgres.EntityRepository
+	RelationRepo  *postgres.RelationRepository
+	EventRepo     *postgres.EventRepository
+	JobRepo       *postgres.JobRepository
+	LLMUsageRepo  *postgres.LLMUsageEventRepository
+	SessionRepo   *postgres.ConversationSessionRepository
+	TurnRepo      *postgres.ConversationTurnRepository
+	ArtifactRepo  *postgres.ArtifactRepository
+	PCSessionRepo *postgres.ProjectCreationSessionRepository
+	PCTurnRepo    *postgres.ProjectCreationTurnRepository
+}
+
 // InitializeDataLayer 初始化数据层
 func InitializeDataLayer(ctx context.Context, cfg *config.Config) (*DataLayer, func(), error) {
 	wire.Build(
@@ -57,6 +88,15 @@ func InitializeDataLayer(ctx context.Context, cfg *config.Config) (*DataLayer, f
 		MessagingSet,
 		MilvusSet,
 		wire.Struct(new(DataLayer), "*"),
+	)
+	return nil, nil, nil
+}
+
+// InitializePostgresOnly 仅初始化 PostgreSQL 数据层（用于 bootstrap）
+func InitializePostgresOnly(ctx context.Context, cfg *config.Config) (*PostgresOnlyDataLayer, func(), error) {
+	wire.Build(
+		PostgresSet,
+		wire.Struct(new(PostgresOnlyDataLayer), "*"),
 	)
 	return nil, nil, nil
 }
@@ -87,6 +127,12 @@ var PostgresSet = wire.NewSet(
 	postgres.NewRelationRepository,
 	postgres.NewEventRepository,
 	postgres.NewJobRepository,
+	postgres.NewLLMUsageEventRepository,
+	postgres.NewConversationSessionRepository,
+	postgres.NewConversationTurnRepository,
+	postgres.NewArtifactRepository,
+	postgres.NewProjectCreationSessionRepository,
+	postgres.NewProjectCreationTurnRepository,
 )
 
 // RedisSet Redis 提供者集合
@@ -123,12 +169,22 @@ var GRPCClientsSet = wire.NewSet(
 // RouterSet 路由器提供者集合
 var RouterSet = wire.NewSet(
 	ProvideAuthConfig,
+	llm.NewEinoFactory,
+	story.NewFoundationGenerator,
+	story.NewArtifactGenerator,
+	quota.NewTokenQuotaChecker,
+	story.NewFoundationApplier,
+	story.NewProjectCreationGenerator,
 	handler.NewAuthHandler,
 	handler.NewHealthHandler,
 	handler.NewProjectHandler,
 	handler.NewVolumeHandler,
 	handler.NewChapterHandler,
 	handler.NewEntityHandler,
+	handler.NewFoundationHandler,
+	handler.NewConversationHandler,
+	handler.NewProjectCreationHandler,
+	handler.NewArtifactHandler,
 	handler.NewJobHandler,
 	handler.NewRetrievalHandler,
 	handler.NewStreamHandler,
@@ -154,7 +210,13 @@ var RepoSet = wire.NewSet(
 	wire.Bind(new(repository.EntityRepository), new(*postgres.EntityRepository)),
 	wire.Bind(new(repository.RelationRepository), new(*postgres.RelationRepository)),
 	wire.Bind(new(repository.JobRepository), new(*postgres.JobRepository)),
+	wire.Bind(new(repository.LLMUsageEventRepository), new(*postgres.LLMUsageEventRepository)),
 	wire.Bind(new(repository.EventRepository), new(*postgres.EventRepository)),
+	wire.Bind(new(repository.ConversationSessionRepository), new(*postgres.ConversationSessionRepository)),
+	wire.Bind(new(repository.ConversationTurnRepository), new(*postgres.ConversationTurnRepository)),
+	wire.Bind(new(repository.ArtifactRepository), new(*postgres.ArtifactRepository)),
+	wire.Bind(new(repository.ProjectCreationSessionRepository), new(*postgres.ProjectCreationSessionRepository)),
+	wire.Bind(new(repository.ProjectCreationTurnRepository), new(*postgres.ProjectCreationTurnRepository)),
 )
 
 // ProvidePostgresClient 提供 PostgreSQL 客户端
