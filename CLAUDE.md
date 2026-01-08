@@ -1,6 +1,6 @@
 # z-novel-ai-api（后端）— 当前状态与目录结构
 
-更新时间：2026-01-07
+更新时间：2026-01-08
 
 本文档面向"维护/二次开发"，目标是让你在 1 分钟内明确：
 
@@ -84,9 +84,11 @@
 
 在不改变现有 API 与数据结构的前提下，将设定生成链路升级为可组合、可观测、可扩展的 Eino 工作流：
 
-- Prompt 统一管理（go:embed ChatTemplate）：`internal/workflow/prompt/*`
+- Prompt 统一管理（go:embed ChatTemplate）：`internal/workflow/prompt/*`（含 `artifact_v2` / `artifact_patch_v1`）
 - Foundation / ProjectCreation：Chain 重构主路径（Prompt → LLM → Parse → Validate → Normalize）
-- Artifact：Graph + ToolCalling（ReAct 回路）按需获取上下文
+- Artifact：Graph + ToolCalling（ReAct 回路）按需获取上下文 + 校验失败修复回路（Validate → Repair → Re-run）
+- 增量 Patch 模式（JSON Patch）：先支持 `novel_foundation/worldview` 顶层字段；服务端应用 patch 后仍输出完整 JSON
+- 上下文滚动摘要（Redis）：长会话自动压缩历史（summary + recent turns）并注入 Prompt，降低 token 成本
 - 可观测性：Eino 全局 callbacks + Prometheus 指标：`internal/observability/eino/*`
 - 安全：ProjectCreation 增加服务端“确定性确认门控”，避免模型幻觉触发误创建
 
@@ -182,8 +184,8 @@ JWT_SECRET="dev-secret" FEATURES_CORE_ENABLED=false go run ./cmd/api-gateway
 - `api/openapi`：为空目录。
 - `test/`：仅目录骨架，无测试用例。
 - **动态 RBAC**：当前权限模型为硬编码（静态）。
-- **增量 Patch 模式**：开发中。
-- **上下文自动摘要**：规划中。
+- **Patch 扩展**：`characters/outline` 的增量编辑策略未启用（数组型 JSON Pointer 易脆）。
+- **上下文自动摘要（LLM/结构化）**：当前为轻量滚动压缩，后续可升级为更强语义压缩。
 
 ---
 
