@@ -4,67 +4,49 @@ package quota
 import (
 	"context"
 	"fmt"
-	"time"
 
-	"z-novel-ai-api/internal/domain/entity"
 	"z-novel-ai-api/internal/domain/repository"
 )
 
-// TokenQuotaExceededError 表示租户 Token 日配额已耗尽
-type TokenQuotaExceededError struct {
+// TokenQuotaExceededError 表示租户 Token 余额不足
+type TokenBalanceExceededError struct {
 	TenantID string
-	Max      int64
-	Used     int64
+	Balance  int64
+	Required int64
 }
 
-func (e TokenQuotaExceededError) Error() string {
-	return fmt.Sprintf("token quota exceeded: tenant=%s used=%d max=%d", e.TenantID, e.Used, e.Max)
+func (e TokenBalanceExceededError) Error() string {
+	return fmt.Sprintf("token balance insufficient: tenant=%s balance=%d required=%d", e.TenantID, e.Balance, e.Required)
 }
 
-// TokenQuotaChecker 用于检查租户 Token 日配额
+// TokenQuotaChecker 用于检查租户 Token 余额
 type TokenQuotaChecker struct {
-	jobRepo repository.JobRepository
-	llmRepo repository.LLMUsageEventRepository
-	now     func() time.Time
+	tenantRepo repository.TenantRepository
 }
 
-func NewTokenQuotaChecker(jobRepo repository.JobRepository, llmRepo repository.LLMUsageEventRepository) *TokenQuotaChecker {
+func NewTokenQuotaChecker(tenantRepo repository.TenantRepository) *TokenQuotaChecker {
 	return &TokenQuotaChecker{
-		jobRepo: jobRepo,
-		llmRepo: llmRepo,
-		now:     time.Now,
+		tenantRepo: tenantRepo,
 	}
 }
 
-// CheckDailyTokens 检查租户是否还有当日 Token 配额。
-// 返回：used/max（便于客户端展示），以及是否超过配额的 error。
-func (c *TokenQuotaChecker) CheckDailyTokens(ctx context.Context, tenantID string, quota *entity.TenantQuota) (used int64, max int64, err error) {
-	if quota == nil || quota.MaxTokensPerDay <= 0 {
-		return 0, 0, nil
-	}
-
-	now := c.now().UTC()
-	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-	end := start.Add(24 * time.Hour)
-
-	jobUsed, err := c.jobRepo.GetTokenUsage(ctx, tenantID, start, end)
+// CheckBalance 检查租户余额是否充足
+func (c *TokenQuotaChecker) CheckBalance(ctx context.Context, tenantID string, required int64) (balance int64, err error) {
+	tenant, err := c.tenantRepo.GetByID(ctx, tenantID)
 	if err != nil {
-		return 0, quota.MaxTokensPerDay, err
+		return 0, fmt.Errorf("failed to get tenant for balance check: %w", err)
 	}
-	used = jobUsed
-	if c.llmRepo != nil {
-		llmUsed, llmErr := c.llmRepo.GetTokenUsage(ctx, tenantID, start, end)
-		if llmErr != nil {
-			return 0, quota.MaxTokensPerDay, llmErr
-		}
-		used += llmUsed
+	if tenant == nil {
+		return 0, fmt.Errorf("tenant not found: %s", tenantID)
 	}
-	if used >= quota.MaxTokensPerDay {
-		return used, quota.MaxTokensPerDay, TokenQuotaExceededError{
+
+	if !tenant.HasSufficientBalance(required) {
+		return tenant.TokenBalance, TokenBalanceExceededError{
 			TenantID: tenantID,
-			Max:      quota.MaxTokensPerDay,
-			Used:     used,
+			Balance:  tenant.TokenBalance,
+			Required: required,
 		}
 	}
-	return used, quota.MaxTokensPerDay, nil
+
+	return tenant.TokenBalance, nil
 }

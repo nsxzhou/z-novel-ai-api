@@ -22,49 +22,52 @@ type Router struct {
 	tenantCtxMgr repository.TenantContextManager
 
 	// Handlers
-	authHandler         *handler.AuthHandler
-	healthHandler       *handler.HealthHandler
-	projectHandler      *handler.ProjectHandler
-	volumeHandler       *handler.VolumeHandler
-	chapterHandler      *handler.ChapterHandler
-	entityHandler       *handler.EntityHandler
-	foundationHandler   *handler.FoundationHandler
-	conversationHandler *handler.ConversationHandler
+	authHandler            *handler.AuthHandler
+	healthHandler          *handler.HealthHandler
+	projectHandler         *handler.ProjectHandler
+	volumeHandler          *handler.VolumeHandler
+	chapterHandler         *handler.ChapterHandler
+	entityHandler          *handler.EntityHandler
+	foundationHandler      *handler.FoundationHandler
+	conversationHandler    *handler.ConversationHandler
 	projectCreationHandler *handler.ProjectCreationHandler
-	artifactHandler     *handler.ArtifactHandler
-	jobHandler          *handler.JobHandler
-	retrievalHandler    *handler.RetrievalHandler
-	streamHandler       *handler.StreamHandler
-	userHandler         *handler.UserHandler
-	tenantHandler       *handler.TenantHandler
-	eventHandler        *handler.EventHandler
-	relationHandler     *handler.RelationHandler
+	artifactHandler        *handler.ArtifactHandler
+	jobHandler             *handler.JobHandler
+	retrievalHandler       *handler.RetrievalHandler
+	streamHandler          *handler.StreamHandler
+	userHandler            *handler.UserHandler
+	// Handlers 导出处理器集合以供启动脚本在初始化 Callback 时使用
+	Handlers *RouterHandlers
 }
 
 // RouterHandlers 路由器组件处理器集合
 type RouterHandlers struct {
-	Auth         *handler.AuthHandler
-	Health       *handler.HealthHandler
-	Project      *handler.ProjectHandler
-	Volume       *handler.VolumeHandler
-	Chapter      *handler.ChapterHandler
-	Entity       *handler.EntityHandler
-	Foundation   *handler.FoundationHandler
-	Conversation *handler.ConversationHandler
+	Auth            *handler.AuthHandler
+	Health          *handler.HealthHandler
+	Project         *handler.ProjectHandler
+	Volume          *handler.VolumeHandler
+	Chapter         *handler.ChapterHandler
+	Entity          *handler.EntityHandler
+	Foundation      *handler.FoundationHandler
+	Conversation    *handler.ConversationHandler
 	ProjectCreation *handler.ProjectCreationHandler
-	Artifact     *handler.ArtifactHandler
-	Job          *handler.JobHandler
-	Retrieval    *handler.RetrievalHandler
-	Stream       *handler.StreamHandler
-	User         *handler.UserHandler
-	Tenant       *handler.TenantHandler
-	Event        *handler.EventHandler
-	Relation     *handler.RelationHandler
+	Artifact        *handler.ArtifactHandler
+	Job             *handler.JobHandler
+	Retrieval       *handler.RetrievalHandler
+	Stream          *handler.StreamHandler
+	User            *handler.UserHandler
+	Tenant          *handler.TenantHandler
+	Event           *handler.EventHandler
+	Relation        *handler.RelationHandler
+
+	// Repositories (needed for eino initialization)
+	TenantRepo    repository.TenantRepository
+	LLMUsageRepo  repository.LLMUsageEventRepository
+	TenantContext repository.TenantContextManager
 
 	// Middleware deps
-	RateLimiter  middleware.RateLimiter
-	Transactor   repository.Transactor
-	TenantCtxMgr repository.TenantContextManager
+	RateLimiter middleware.RateLimiter
+	Transactor  repository.Transactor
 }
 
 // NewWithDeps 创建带依赖的路由器（推荐）
@@ -77,28 +80,12 @@ func NewWithDeps(cfg *config.Config, handlers *RouterHandlers) *Router {
 	engine := gin.New()
 
 	r := &Router{
-		engine:              engine,
-		cfg:                 cfg,
-		rateLimiter:         handlers.RateLimiter,
-		transactor:          handlers.Transactor,
-		tenantCtxMgr:        handlers.TenantCtxMgr,
-		authHandler:         handlers.Auth,
-		healthHandler:       handlers.Health,
-		projectHandler:      handlers.Project,
-		volumeHandler:       handlers.Volume,
-		chapterHandler:      handlers.Chapter,
-		entityHandler:       handlers.Entity,
-		foundationHandler:   handlers.Foundation,
-		conversationHandler: handlers.Conversation,
-		projectCreationHandler: handlers.ProjectCreation,
-		artifactHandler:     handlers.Artifact,
-		jobHandler:          handlers.Job,
-		retrievalHandler:    handlers.Retrieval,
-		streamHandler:       handlers.Stream,
-		userHandler:         handlers.User,
-		tenantHandler:       handlers.Tenant,
-		eventHandler:        handlers.Event,
-		relationHandler:     handlers.Relation,
+		engine:       engine,
+		cfg:          cfg,
+		rateLimiter:  handlers.RateLimiter,
+		transactor:   handlers.Transactor,
+		tenantCtxMgr: handlers.TenantContext,
+		Handlers:     handlers,
 	}
 
 	r.setupMiddleware()
@@ -188,21 +175,21 @@ func (r *Router) setupBusinessRoutes() {
 	// 注册业务路由
 	RegisterV1Routes(
 		v1,
-		r.authHandler,
-		r.projectHandler,
-		r.volumeHandler,
-		r.chapterHandler,
-		r.entityHandler,
-		r.foundationHandler,
-		r.conversationHandler,
-		r.projectCreationHandler,
-		r.artifactHandler,
-		r.jobHandler,
-		r.retrievalHandler,
-		r.streamHandler,
-		r.userHandler,
-		r.tenantHandler,
-		r.eventHandler,
-		r.relationHandler,
+		r.Handlers.Auth,
+		r.Handlers.Project,
+		r.Handlers.Volume,
+		r.Handlers.Chapter,
+		r.Handlers.Entity,
+		r.Handlers.Foundation,
+		r.Handlers.Conversation,
+		r.Handlers.ProjectCreation,
+		r.Handlers.Artifact,
+		r.Handlers.Job,
+		r.Handlers.Retrieval,
+		r.Handlers.Stream,
+		r.Handlers.User,
+		r.Handlers.Tenant,
+		r.Handlers.Event,
+		r.Handlers.Relation,
 	)
 }

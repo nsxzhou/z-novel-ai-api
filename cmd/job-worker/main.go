@@ -51,9 +51,7 @@ func main() {
 	}
 	defer func() { _ = shutdown(ctx) }()
 
-	// 初始化 Eino 全局 callbacks（指标/追踪/日志）
-	einoobs.Init()
-
+	// 1. 初始化基础基础设施
 	pgClient, err := postgres.NewClient(&cfg.Database.Postgres)
 	if err != nil {
 		logger.Fatal(ctx, "failed to init postgres", err)
@@ -66,18 +64,22 @@ func main() {
 	}
 	defer func() { _ = redisClient.Close() }()
 
+	// 2. 初始化 Repositories
 	txMgr := postgres.NewTxManager(pgClient)
 	tenantCtx := postgres.NewTenantContext(pgClient)
 	jobRepo := postgres.NewJobRepository(pgClient)
 	tenantRepo := postgres.NewTenantRepository(pgClient)
 	chapterRepo := postgres.NewChapterRepository(pgClient)
 	projectRepo := postgres.NewProjectRepository(pgClient)
-
 	llmUsageRepo := postgres.NewLLMUsageEventRepository(pgClient)
 
+	// 3. 初始化 Eino 全局 callbacks（搬移到这里以确保 Repo 变量已定义）
+	einoobs.Init(tenantRepo, llmUsageRepo, tenantCtx)
+
+	// 4. 初始化应用逻辑
 	llmFactory := llm.NewEinoFactory(cfg)
 	foundationGenerator := story.NewFoundationGenerator(llmFactory)
-	tokenQuotaChecker := quota.NewTokenQuotaChecker(jobRepo, llmUsageRepo)
+	tokenQuotaChecker := quota.NewTokenQuotaChecker(tenantRepo)
 
 	storyConn, err := grpcclient.Dial(ctx, cfg.Clients.GRPC.StoryGenServiceAddr, cfg.Clients.GRPC.DialTimeout)
 	if err != nil {
@@ -86,6 +88,7 @@ func main() {
 	defer func() { _ = storyConn.Close() }()
 	storyClient := storyv1.NewStoryGenServiceClient(storyConn)
 
+	// 5. 初始化消息消费者
 	consumer := messaging.NewConsumer(redisClient.Redis(), messaging.ConsumerConfig{
 		Stream:        messaging.StreamStoryGen,
 		Group:         messaging.ConsumerGroupGenWorker,
@@ -100,6 +103,7 @@ func main() {
 		},
 	})
 
+	// 注册 chapter_gen 处理器
 	consumer.RegisterHandler("chapter_gen", func(_ context.Context, msg *messaging.Message) error {
 		var payload messaging.GenerationJobMessage
 		if err := msg.UnmarshalPayload(&payload); err != nil {
@@ -205,6 +209,7 @@ func main() {
 		})
 	})
 
+	// 注册 foundation_gen 处理器
 	consumer.RegisterHandler("foundation_gen", func(handlerCtx context.Context, msg *messaging.Message) error {
 		var payload messaging.GenerationJobMessage
 		if err := msg.UnmarshalPayload(&payload); err != nil {
@@ -235,8 +240,9 @@ func main() {
 				return fmt.Errorf("tenant not found: %s", payload.TenantID)
 			}
 
-			if _, _, err := tokenQuotaChecker.CheckDailyTokens(txCtx, payload.TenantID, tenant.Quota); err != nil {
-				var exceeded quota.TokenQuotaExceededError
+			// 余额检查
+			if _, err := tokenQuotaChecker.CheckBalance(txCtx, payload.TenantID, 1000); err != nil {
+				var exceeded quota.TokenBalanceExceededError
 				if errors.As(err, &exceeded) {
 					job.Fail(err.Error())
 					_ = jobRepo.Update(txCtx, job)

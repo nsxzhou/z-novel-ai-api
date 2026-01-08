@@ -67,15 +67,16 @@ func main() {
 		}
 	}()
 
-	// 初始化 Eino 全局 callbacks（指标/追踪/日志）
-	einoobs.Init()
-
 	// 初始化应用（使用 Wire 注入）
 	app, cleanupApp, err := wire.InitializeApp(ctx, cfg)
 	if err != nil {
 		logger.Fatal(ctx, "failed to initialize app", err)
 	}
 	defer cleanupApp()
+
+	// 初始化 Eino 全局 callbacks（指标/追踪/日志/自动化扣费）
+	// 注意：这里需要注入 Repo 以实现自动扣费
+	einoobs.Init(app.Handlers.TenantRepo, app.Handlers.LLMUsageRepo, app.Handlers.TenantContext)
 
 	// 获取引擎
 	r := app.Engine()

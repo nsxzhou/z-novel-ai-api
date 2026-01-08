@@ -8,6 +8,7 @@ type LLMUsageEvent struct {
 	TenantID         string    `json:"tenant_id" gorm:"type:uuid;index;not null"`
 	Provider         string    `json:"provider" gorm:"type:varchar(32);not null"`
 	Model            string    `json:"model" gorm:"type:varchar(64);not null"`
+	Workflow         string    `json:"workflow" gorm:"type:varchar(64)"`
 	TokensPrompt     int       `json:"tokens_prompt" gorm:"not null;default:0"`
 	TokensCompletion int       `json:"tokens_completion" gorm:"not null;default:0"`
 	DurationMs       int       `json:"duration_ms" gorm:"not null;default:0"`
@@ -17,4 +18,3 @@ type LLMUsageEvent struct {
 func (LLMUsageEvent) TableName() string {
 	return "llm_usage_events"
 }
-

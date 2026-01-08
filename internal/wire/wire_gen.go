@@ -173,8 +173,7 @@ func InitializeApp(ctx context.Context, cfg *config.Config) (*router.Router, fun
 	entityHandler := handler.NewEntityHandler(entityRepository, relationRepository)
 	txManager := postgres.NewTxManager(client)
 	tenantContext := postgres.NewTenantContext(client)
-	llmUsageEventRepository := postgres.NewLLMUsageEventRepository(client)
-	tokenQuotaChecker := quota.NewTokenQuotaChecker(jobRepository, llmUsageEventRepository)
+	tokenQuotaChecker := quota.NewTokenQuotaChecker(tenantRepository)
 	einoFactory := llm.NewEinoFactory(cfg)
 	foundationGenerator := story.NewFoundationGenerator(einoFactory)
 	foundationApplier := story.NewFoundationApplier(projectRepository, entityRepository, relationRepository, volumeRepository, chapterRepository)
@@ -186,6 +185,7 @@ func InitializeApp(ctx context.Context, cfg *config.Config) (*router.Router, fun
 	conversationHandler := handler.NewConversationHandler(cfg, txManager, tenantContext, tenantRepository, projectRepository, jobRepository, conversationSessionRepository, conversationTurnRepository, artifactRepository, tokenQuotaChecker, artifactGenerator)
 	projectCreationSessionRepository := postgres.NewProjectCreationSessionRepository(client)
 	projectCreationTurnRepository := postgres.NewProjectCreationTurnRepository(client)
+	llmUsageEventRepository := postgres.NewLLMUsageEventRepository(client)
 	projectCreationGenerator := story.NewProjectCreationGenerator(einoFactory)
 	projectCreationHandler := handler.NewProjectCreationHandler(cfg, txManager, tenantContext, tenantRepository, projectRepository, conversationSessionRepository, projectCreationSessionRepository, projectCreationTurnRepository, jobRepository, llmUsageEventRepository, tokenQuotaChecker, projectCreationGenerator)
 	artifactHandler := handler.NewArtifactHandler(artifactRepository)
@@ -231,9 +231,11 @@ func InitializeApp(ctx context.Context, cfg *config.Config) (*router.Router, fun
 		Tenant:          tenantHandler,
 		Event:           eventHandler,
 		Relation:        relationHandler,
+		TenantRepo:      tenantRepository,
+		LLMUsageRepo:    llmUsageEventRepository,
+		TenantContext:   tenantContext,
 		RateLimiter:     rateLimiter,
 		Transactor:      txManager,
-		TenantCtxMgr:    tenantContext,
 	}
 	routerRouter := router.NewWithDeps(cfg, routerHandlers)
 	return routerRouter, func() {

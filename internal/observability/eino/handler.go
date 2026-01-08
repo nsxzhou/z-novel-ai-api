@@ -14,6 +14,8 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
+	"z-novel-ai-api/internal/domain/entity"
+	"z-novel-ai-api/internal/domain/repository"
 	"z-novel-ai-api/pkg/metrics"
 )
 
@@ -30,106 +32,110 @@ type startTimeKey struct{}
 //   - 分布式追踪信息
 //
 // 返回值会注册到全局回调链中，监控所有 AI 模型调用
-func newChatModelCallbackHandler() *cbtemplate.ModelCallbackHandler {
+// newChatModelCallbackHandler 创建 AI 大模型调用的回调处理器
+func newChatModelCallbackHandler(tenantRepo repository.TenantRepository, llmRepo repository.LLMUsageEventRepository, tenantCtxMgr repository.TenantContextManager) *cbtemplate.ModelCallbackHandler {
 	return &cbtemplate.ModelCallbackHandler{
-		// OnStart 在 AI 模型开始生成时被调用
-		// 记录开始时间、收集元信息、启动分布式追踪
+		// OnStart ... (保持追踪逻辑不变)
 		OnStart: func(ctx context.Context, info *einocb.RunInfo, input *model.CallbackInput) context.Context {
-			// 记录开始时间，用于后续计算耗时
 			ctx = context.WithValue(ctx, startTimeKey{}, time.Now())
 
-			// 从上下文中获取工作流名称和模型提供商
-			// 这些信息由 WithWorkflow/WithProvider 预先设置
 			workflow := WorkflowFromContext(ctx)
 			provider := ProviderFromContext(ctx)
 			modelName := modelNameFromInput(input)
 
-			// 构建 OpenTelemetry 追踪属性
 			attrs := []attribute.KeyValue{
-				attribute.String("eino.workflow", workflow), // 工作流名称
-				attribute.String("llm.provider", provider),  // 模型提供商
-				attribute.String("llm.model", modelName),    // 模型名称
+				attribute.String("eino.workflow", workflow),
+				attribute.String("llm.provider", provider),
+				attribute.String("llm.model", modelName),
 			}
-			// 如果有节点信息，也添加到属性中
 			if info != nil {
 				attrs = append(attrs,
-					attribute.String("eino.node_name", info.Name), // 节点名称
-					attribute.String("eino.type", info.Type),      // 组件类型
+					attribute.String("eino.node_name", info.Name),
+					attribute.String("eino.type", info.Type),
 				)
 			}
 
-			// 启动分布式追踪，创建一个新的 Span
-			// Span 会记录这次 AI 调用的完整链路
 			ctx, _ = otel.Tracer("eino").Start(ctx, "llm.generate", trace.WithAttributes(attrs...))
 			return ctx
 		},
 
-		// OnEnd 在 AI 模型完成生成时被调用
-		// 记录成功状态、Token 消耗、耗时，更新追踪信息
+		// OnEnd ... (增加扣费和持久化逻辑)
 		OnEnd: func(ctx context.Context, info *einocb.RunInfo, output *model.CallbackOutput) context.Context {
 			workflow := WorkflowFromContext(ctx)
 			provider := ProviderFromContext(ctx)
 			modelName := modelNameFromOutput(output)
 
-			// 上报调用次数指标（成功）
+			// 1. 指标上报
 			metrics.LLMCallTotal.WithLabelValues(workflow, provider, modelName, "success").Inc()
-
-			// 计算耗时并上报
 			if d := elapsedSeconds(ctx); d > 0 {
 				metrics.LLMCallDuration.WithLabelValues(workflow, provider, modelName).Observe(d)
 			}
 
-			// 如果有 Token 使用情况，上报 Token 消耗
-			// Prompt Tokens：输入消耗的 Token
-			// Completion Tokens：输出消耗的 Token
 			if output != nil && output.TokenUsage != nil {
-				metrics.LLMTokensUsed.WithLabelValues(workflow, provider, modelName, "prompt").Add(float64(output.TokenUsage.PromptTokens))
-				metrics.LLMTokensUsed.WithLabelValues(workflow, provider, modelName, "completion").Add(float64(output.TokenUsage.CompletionTokens))
+				promptTokens := output.TokenUsage.PromptTokens
+				completionTokens := output.TokenUsage.CompletionTokens
+
+				metrics.LLMTokensUsed.WithLabelValues(workflow, provider, modelName, "prompt").Add(float64(promptTokens))
+				metrics.LLMTokensUsed.WithLabelValues(workflow, provider, modelName, "completion").Add(float64(completionTokens))
+
+				// 2. 自动化扣费与流水记录 (如果有 Repo 注入)
+				if tenantRepo != nil && llmRepo != nil && tenantCtxMgr != nil {
+					if postgresCtxMgr, ok := tenantCtxMgr.(interface {
+						GetCurrentTenant(ctx context.Context) (string, error)
+					}); ok {
+						tenantID, _ := postgresCtxMgr.GetCurrentTenant(ctx)
+						if tenantID != "" {
+							totalTokens := int64(promptTokens + completionTokens)
+
+							// 扣余额
+							_ = tenantRepo.DeductBalance(ctx, tenantID, totalTokens)
+
+							// 记流水
+							_ = llmRepo.Create(ctx, &entity.LLMUsageEvent{
+								TenantID:         tenantID,
+								Provider:         provider,
+								Model:            modelName,
+								Workflow:         workflow,
+								TokensPrompt:     promptTokens,
+								TokensCompletion: completionTokens,
+								DurationMs:       int(elapsedSeconds(ctx) * 1000),
+							})
+						}
+					}
+				}
 			}
 
-			// 更新分布式追踪的 Span 信息
+			// 3. 追踪 Span 结束
 			span := trace.SpanFromContext(ctx)
 			if span != nil {
-				// 将 Token 使用情况添加到追踪信息中
 				if output != nil && output.TokenUsage != nil {
 					span.SetAttributes(
 						attribute.Int("llm.prompt_tokens", output.TokenUsage.PromptTokens),
 						attribute.Int("llm.completion_tokens", output.TokenUsage.CompletionTokens),
 					)
 				}
-				// 结束这个 Span
 				span.End()
 			}
 			return ctx
 		},
 
-		// OnError 在 AI 模型调用出错时被调用
-		// 记录失败状态、错误信息、耗时
 		OnError: func(ctx context.Context, info *einocb.RunInfo, err error) context.Context {
 			workflow := WorkflowFromContext(ctx)
 			provider := ProviderFromContext(ctx)
-			// 发生错误时，从 info.Type 获取模型名称
 			modelName := ""
 			if info != nil {
 				modelName = info.Type
 			}
 
-			// 上报调用次数指标（失败）
 			metrics.LLMCallTotal.WithLabelValues(workflow, provider, modelName, "error").Inc()
-
-			// 计算耗时并上报
 			if d := elapsedSeconds(ctx); d > 0 {
 				metrics.LLMCallDuration.WithLabelValues(workflow, provider, modelName).Observe(d)
 			}
 
-			// 更新分布式追踪的 Span 信息
 			span := trace.SpanFromContext(ctx)
 			if span != nil {
-				// 记录错误
 				span.RecordError(err)
-				// 设置 Span 状态为错误
 				span.SetStatus(codes.Error, err.Error())
-				// 结束这个 Span
 				span.End()
 			}
 			return ctx

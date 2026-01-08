@@ -43,12 +43,13 @@ func resolveProviderModel(cfg *config.Config, provider, model string) (string, s
 	return p, m, nil
 }
 
-// precheckQuota 检查配额
+// precheckQuota 检查余额是否足以进行至少一次基础调用
 func precheckQuota(ctx context.Context, quotaChecker *quota.TokenQuotaChecker, tenant *entity.Tenant) error {
 	if quotaChecker == nil {
 		return nil
 	}
-	_, _, err := quotaChecker.CheckDailyTokens(ctx, tenant.ID, tenant.Quota)
+	// 预查时至少需要 1000 token 余额以允许开始任务
+	_, err := quotaChecker.CheckBalance(ctx, tenant.ID, 1000)
 	return err
 }
 

@@ -147,3 +147,25 @@ func (r *TenantRepository) ExistsBySlug(ctx context.Context, slug string) (bool,
 	}
 	return count > 0, nil
 }
+
+// DeductBalance 原子扣除租户余额
+func (r *TenantRepository) DeductBalance(ctx context.Context, id string, amount int64) error {
+	ctx, span := tracer.Start(ctx, "postgres.TenantRepository.DeductBalance")
+	defer span.End()
+
+	db := getDB(ctx, r.client.db)
+	result := db.Model(&entity.Tenant{}).
+		Where("id = ? AND token_balance >= ?", id, amount).
+		Update("token_balance", gorm.Expr("token_balance - ?", amount))
+
+	if result.Error != nil {
+		span.RecordError(result.Error)
+		return fmt.Errorf("failed to deduct balance: %w", result.Error)
+	}
+
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("insufficient balance or tenant not found: %s", id)
+	}
+
+	return nil
+}

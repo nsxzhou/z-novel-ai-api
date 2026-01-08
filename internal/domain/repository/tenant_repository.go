@@ -32,4 +32,7 @@ type TenantRepository interface {
 
 	// ExistsBySlug 检查 Slug 是否存在
 	ExistsBySlug(ctx context.Context, slug string) (bool, error)
+
+	// DeductBalance 原子扣除租户余额
+	DeductBalance(ctx context.Context, id string, amount int64) error
 }

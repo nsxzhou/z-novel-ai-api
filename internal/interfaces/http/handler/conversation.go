@@ -378,7 +378,7 @@ func (h *ConversationHandler) SendMessage(c *gin.Context) {
 
 		return nil
 	}); err != nil {
-		var exceeded quota.TokenQuotaExceededError
+		var exceeded quota.TokenBalanceExceededError
 		if errors.As(err, &exceeded) {
 			h.writeQuotaError(c, err)
 			return
@@ -557,9 +557,9 @@ func (h *ConversationHandler) SendMessage(c *gin.Context) {
 }
 
 func (h *ConversationHandler) writeQuotaError(c *gin.Context, err error) {
-	var exceeded quota.TokenQuotaExceededError
+	var exceeded quota.TokenBalanceExceededError
 	if errors.As(err, &exceeded) {
-		dto.Error(c, http.StatusTooManyRequests, "token quota exceeded")
+		dto.Error(c, http.StatusTooManyRequests, "token balance insufficient")
 		return
 	}
 	dto.InternalError(c, "quota check failed")
