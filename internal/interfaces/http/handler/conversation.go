@@ -16,6 +16,7 @@ import (
 	"z-novel-ai-api/internal/config"
 	"z-novel-ai-api/internal/domain/entity"
 	"z-novel-ai-api/internal/domain/repository"
+	rediscache "z-novel-ai-api/internal/infrastructure/persistence/redis"
 	"z-novel-ai-api/internal/interfaces/http/dto"
 	"z-novel-ai-api/internal/interfaces/http/middleware"
 	"z-novel-ai-api/pkg/logger"
@@ -38,8 +39,15 @@ type ConversationHandler struct {
 	turnRepo     repository.ConversationTurnRepository
 	artifactRepo repository.ArtifactRepository
 
+	cache        *rediscache.Cache
 	quotaChecker *quota.TokenQuotaChecker
 	generator    *story.ArtifactGenerator
+}
+
+const conversationRollingContextTTL = 30 * 24 * time.Hour
+
+func conversationRollingContextKey(tenantID, projectID, sessionID string, task entity.ConversationTask) string {
+	return fmt.Sprintf("ctx:%s:%s:%s:%s:rolling", tenantID, projectID, sessionID, task)
 }
 
 func NewConversationHandler(
@@ -52,6 +60,7 @@ func NewConversationHandler(
 	sessionRepo repository.ConversationSessionRepository,
 	turnRepo repository.ConversationTurnRepository,
 	artifactRepo repository.ArtifactRepository,
+	cache *rediscache.Cache,
 	quotaChecker *quota.TokenQuotaChecker,
 	generator *story.ArtifactGenerator,
 ) *ConversationHandler {
@@ -65,6 +74,7 @@ func NewConversationHandler(
 		sessionRepo:  sessionRepo,
 		turnRepo:     turnRepo,
 		artifactRepo: artifactRepo,
+		cache:        cache,
 		quotaChecker: quotaChecker,
 		generator:    generator,
 	}
@@ -392,21 +402,41 @@ func (h *ConversationHandler) SendMessage(c *gin.Context) {
 		return
 	}
 
+	conversationSummary := ""
+	recentUserTurns := ""
+	if h.cache != nil && task != "" {
+		key := conversationRollingContextKey(tenantID, projectID, sessionID, task)
+		var rolling story.RollingConversationContext
+		if b, err := h.cache.Get(ctx, key); err == nil && len(b) > 0 {
+			_ = json.Unmarshal(b, &rolling)
+		}
+
+		conversationSummary, recentUserTurns = rolling.SnapshotForPrompt()
+		rolling.AppendUserPrompt(strings.TrimSpace(req.Prompt))
+		if err := h.cache.Set(ctx, key, &rolling, conversationRollingContextTTL); err != nil {
+			logger.Warn(ctx, "failed to update rolling conversation context",
+				"error", err.Error(),
+			)
+		}
+	}
+
 	start := time.Now()
 	out, genErr := h.generator.Generate(ctx, &story.ArtifactGenerateInput{
-		ProjectTitle:       project.Title,
-		ProjectDescription: project.Description,
-		Type:               artifactType,
-		Prompt:             strings.TrimSpace(req.Prompt),
-		Attachments:        req.ToStoryAttachments(),
-		CurrentWorldview:   currentWorldview,
-		CurrentCharacters:  currentCharacters,
-		CurrentOutline:     currentOutline,
-		CurrentArtifactRaw: currentArtifact,
-		Provider:           provider,
-		Model:              model,
-		Temperature:        req.Temperature,
-		MaxTokens:          req.MaxTokens,
+		ProjectTitle:        project.Title,
+		ProjectDescription:  project.Description,
+		Type:                artifactType,
+		Prompt:              strings.TrimSpace(req.Prompt),
+		Attachments:         req.ToStoryAttachments(),
+		ConversationSummary: conversationSummary,
+		RecentUserTurns:     recentUserTurns,
+		CurrentWorldview:    currentWorldview,
+		CurrentCharacters:   currentCharacters,
+		CurrentOutline:      currentOutline,
+		CurrentArtifactRaw:  currentArtifact,
+		Provider:            provider,
+		Model:               model,
+		Temperature:         req.Temperature,
+		MaxTokens:           req.MaxTokens,
 	})
 	durationMs := int(time.Since(start).Milliseconds())
 
@@ -483,13 +513,14 @@ func (h *ConversationHandler) SendMessage(c *gin.Context) {
 			}
 		}
 
-		assistantMeta, _ := json.Marshal(map[string]any{
+		metaObj := map[string]any{
 			"job_id":            jobID,
 			"artifact_id":       art.ID,
 			"version_id":        version.ID,
 			"version_no":        version.VersionNo,
 			"provider":          out.Meta.Provider,
 			"model":             out.Meta.Model,
+			"generation_mode":   out.Mode,
 			"prompt_tokens":     out.Meta.PromptTokens,
 			"completion_tokens": out.Meta.CompletionTokens,
 			"temperature":       out.Meta.Temperature,
@@ -497,7 +528,11 @@ func (h *ConversationHandler) SendMessage(c *gin.Context) {
 			"generated_at":      out.Meta.GeneratedAt.Format(time.RFC3339),
 			"request_id":        requestID,
 			"trace_id":          traceID,
-		})
+		}
+		if strings.TrimSpace(out.Mode) == "json_patch" && strings.TrimSpace(out.ModelRaw) != "" {
+			metaObj["model_raw"] = out.ModelRaw
+		}
+		assistantMeta, _ := json.Marshal(metaObj)
 		assistantTurn := entity.NewConversationTurn(sessionID, entity.RoleAssistant, task, out.Raw, assistantMeta)
 		assistantTurn.ID = assistantTurnID
 		if err := h.turnRepo.Create(txCtx, assistantTurn); err != nil {

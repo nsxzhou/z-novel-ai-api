@@ -22,6 +22,14 @@ import (
 )
 
 const DefaultMaxToolRounds = 4
+const DefaultMaxRepairRounds = 2
+
+type artifactOutputMode string
+
+const (
+	artifactOutputModeFull      artifactOutputMode = "full"
+	artifactOutputModeJSONPatch artifactOutputMode = "json_patch"
+)
 
 type ArtifactGenerateInput struct {
 	ProjectTitle       string
@@ -31,6 +39,9 @@ type ArtifactGenerateInput struct {
 
 	Prompt      string
 	Attachments []TextAttachment
+
+	ConversationSummary string
+	RecentUserTurns     string
 
 	CurrentWorldview   json.RawMessage
 	CurrentCharacters  json.RawMessage
@@ -45,10 +56,12 @@ type ArtifactGenerateInput struct {
 }
 
 type ArtifactGenerateOutput struct {
-	Type    entity.ArtifactType
-	Content json.RawMessage
-	Raw     string
-	Meta    LLMUsageMeta
+	Type     entity.ArtifactType
+	Content  json.RawMessage
+	Raw      string
+	ModelRaw string
+	Mode     string
+	Meta     LLMUsageMeta
 }
 
 type ArtifactGenerator struct {
@@ -83,7 +96,7 @@ func (g *ArtifactGenerator) Generate(ctx context.Context, in *ArtifactGenerateIn
 }
 
 func formatArtifactMessages(ctx context.Context, in *ArtifactGenerateInput) ([]*schema.Message, error) {
-	tpl, err := defaultPromptRegistry.ChatTemplate(workflowprompt.PromptArtifactV1)
+	tpl, err := defaultPromptRegistry.ChatTemplate(workflowprompt.PromptArtifactV2)
 	if err != nil {
 		return nil, err
 	}
@@ -94,14 +107,55 @@ func formatArtifactMessages(ctx context.Context, in *ArtifactGenerateInput) ([]*
 	}
 
 	vars := map[string]any{
-		"project_title":       strings.TrimSpace(in.ProjectTitle),
-		"project_description": strings.TrimSpace(in.ProjectDescription),
-		"artifact_type":       strings.TrimSpace(string(in.Type)),
-		"prompt":              strings.TrimSpace(in.Prompt),
-		"attachments_block":   buildAttachmentsBlock(in.Attachments),
-		"current_hint":        currentHint,
+		"project_title":        strings.TrimSpace(in.ProjectTitle),
+		"project_description":  strings.TrimSpace(in.ProjectDescription),
+		"artifact_type":        strings.TrimSpace(string(in.Type)),
+		"conversation_summary": strings.TrimSpace(in.ConversationSummary),
+		"recent_user_turns":    strings.TrimSpace(in.RecentUserTurns),
+		"prompt":               strings.TrimSpace(in.Prompt),
+		"attachments_block":    buildAttachmentsBlock(in.Attachments),
+		"current_hint":         currentHint,
 	}
 	return tpl.Format(ctx, vars)
+}
+
+func formatArtifactPatchMessages(ctx context.Context, in *ArtifactGenerateInput) ([]*schema.Message, error) {
+	tpl, err := defaultPromptRegistry.ChatTemplate(workflowprompt.PromptArtifactPatchV1)
+	if err != nil {
+		return nil, err
+	}
+
+	current := strings.TrimSpace(string(in.CurrentArtifactRaw))
+	if current == "" {
+		current = "{}"
+	}
+	current = truncateByRunes(current, 60000)
+
+	allowedOps := strings.Join(artifactJSONPatchAllowedOps(), ", ")
+	allowedPaths := strings.Join(artifactJSONPatchAllowedPaths(in.Type), ", ")
+
+	vars := map[string]any{
+		"project_title":         strings.TrimSpace(in.ProjectTitle),
+		"project_description":   strings.TrimSpace(in.ProjectDescription),
+		"artifact_type":         strings.TrimSpace(string(in.Type)),
+		"current_artifact_json": current,
+		"conversation_summary":  strings.TrimSpace(in.ConversationSummary),
+		"recent_user_turns":     strings.TrimSpace(in.RecentUserTurns),
+		"prompt":                strings.TrimSpace(in.Prompt),
+		"attachments_block":     buildAttachmentsBlock(in.Attachments),
+		"allowed_ops":           allowedOps,
+		"allowed_paths":         allowedPaths,
+	}
+	return tpl.Format(ctx, vars)
+}
+
+func cloneMessages(msgs []*schema.Message) []*schema.Message {
+	if len(msgs) == 0 {
+		return nil
+	}
+	out := make([]*schema.Message, len(msgs))
+	copy(out, msgs)
+	return out
 }
 
 type artifactReActState struct {
@@ -110,11 +164,23 @@ type artifactReActState struct {
 	ChatModel     model.BaseChatModel
 	Messages      []*schema.Message
 	LastAssistant *schema.Message
+	FullMessages  []*schema.Message
+	PatchMessages []*schema.Message
 
 	Tools         []einotool.BaseTool
 	ToolInfos     []*schema.ToolInfo
 	ToolRounds    int
 	MaxToolRounds int
+
+	Mode         artifactOutputMode
+	FallbackUsed bool
+
+	ValidatedContent json.RawMessage
+	LastRawJSON      string
+	ValidateErr      error
+
+	RepairRounds    int
+	MaxRepairRounds int
 }
 
 func (g *ArtifactGenerator) getGraph() (compose.Runnable[*ArtifactGenerateInput, *ArtifactGenerateOutput], error) {
@@ -181,9 +247,24 @@ func (g *ArtifactGenerator) buildGraph(ctx context.Context) (compose.Runnable[*A
 			return nil, fmt.Errorf("llm factory not configured")
 		}
 
-		msgs, err := formatArtifactMessages(ctx, in)
+		fullMsgs, err := formatArtifactMessages(ctx, in)
 		if err != nil {
 			return nil, err
+		}
+
+		mode := artifactOutputModeFull
+		var patchMsgs []*schema.Message
+		if isArtifactJSONPatchEnabled(in) {
+			patchMsgs, err = formatArtifactPatchMessages(ctx, in)
+			if err != nil {
+				return nil, err
+			}
+			mode = artifactOutputModeJSONPatch
+		}
+
+		msgs := cloneMessages(fullMsgs)
+		if mode == artifactOutputModeJSONPatch && len(patchMsgs) > 0 {
+			msgs = cloneMessages(patchMsgs)
 		}
 
 		ctx = einoobs.WithWorkflowProvider(ctx, "artifact_generate", in.Provider)
@@ -219,13 +300,17 @@ func (g *ArtifactGenerator) buildGraph(ctx context.Context) (compose.Runnable[*A
 		}
 
 		return &artifactReActState{
-			In:            in,
-			BaseModel:     baseModel,
-			ChatModel:     chatModel,
-			Messages:      msgs,
-			Tools:         tools,
-			ToolInfos:     toolInfos,
-			MaxToolRounds: DefaultMaxToolRounds, // 防止死循环的最大轮数限制
+			In:              in,
+			BaseModel:       baseModel,
+			ChatModel:       chatModel,
+			Messages:        msgs,
+			FullMessages:    fullMsgs,
+			PatchMessages:   patchMsgs,
+			Tools:           tools,
+			ToolInfos:       toolInfos,
+			MaxToolRounds:   DefaultMaxToolRounds, // 防止死循环的最大轮数限制
+			MaxRepairRounds: DefaultMaxRepairRounds,
+			Mode:            mode,
 		}, nil
 	}), compose.WithNodeName("artifact.init")); err != nil {
 		return nil, err
@@ -247,7 +332,7 @@ func (g *ArtifactGenerator) buildGraph(ctx context.Context) (compose.Runnable[*A
 		ctx = einoobs.WithWorkflowProvider(ctx, "artifact_generate", st.In.Provider)
 
 		// 尝试生成
-		outMsg, err := st.ChatModel.Generate(ctx, st.Messages, buildArtifactModelOptions(st.In, true)...)
+		outMsg, err := st.ChatModel.Generate(ctx, st.Messages, buildArtifactModelOptions(st.In, true, st.Mode)...)
 
 		// 降级 A: 如果模型不支持工具调用，回退到不带工具的基础模型
 		if err != nil && isToolsUnsupportedError(err) && st.BaseModel != nil && st.ChatModel != st.BaseModel {
@@ -258,7 +343,7 @@ func (g *ArtifactGenerator) buildGraph(ctx context.Context) (compose.Runnable[*A
 				"error", err.Error(),
 			)
 			st.ChatModel = st.BaseModel
-			outMsg, err = st.ChatModel.Generate(ctx, st.Messages, buildArtifactModelOptions(st.In, true)...)
+			outMsg, err = st.ChatModel.Generate(ctx, st.Messages, buildArtifactModelOptions(st.In, true, st.Mode)...)
 		}
 
 		// 降级 B: 如果模型不支持 JSON Schema，回退到普通模式
@@ -269,7 +354,7 @@ func (g *ArtifactGenerator) buildGraph(ctx context.Context) (compose.Runnable[*A
 				"artifact_type", string(st.In.Type),
 				"error", err.Error(),
 			)
-			outMsg, err = st.ChatModel.Generate(ctx, st.Messages, buildArtifactModelOptions(st.In, false)...)
+			outMsg, err = st.ChatModel.Generate(ctx, st.Messages, buildArtifactModelOptions(st.In, false, st.Mode)...)
 		}
 		if err != nil {
 			return nil, err
@@ -317,26 +402,92 @@ func (g *ArtifactGenerator) buildGraph(ctx context.Context) (compose.Runnable[*A
 	}
 
 	// ---------------------------------------------------------------------
-	// 4. Finalize: 结果处理节点
+	// 4. Validate: 解析与校验节点
 	// ---------------------------------------------------------------------
 	// 作用：当 LLM 不再调用工具，而是返回最终文本内容时，执行此节点。
 	// 逻辑：
 	//    1. 提取 JSON 内容。
 	//    2. 校验并规范化生成的 Artifact 内容 (normalizeAndValidateArtifact)。
-	//    3. 封装最终输出，包含元数据。
-	if err := graph.AddLambdaNode("finalize", compose.InvokableLambda(func(ctx context.Context, st *artifactReActState) (*ArtifactGenerateOutput, error) {
+	//    3. 将结果写入状态，供 Repair / Finalize 使用。
+	if err := graph.AddLambdaNode("validate", compose.InvokableLambda(func(ctx context.Context, st *artifactReActState) (*artifactReActState, error) {
 		if st == nil || st.In == nil || st.LastAssistant == nil {
 			return nil, fmt.Errorf("state is nil")
 		}
 
-		rawJSON := extractJSONObject(st.LastAssistant.Content)
-		if strings.TrimSpace(rawJSON) == "" {
-			return nil, fmt.Errorf("empty artifact output")
+		st.ValidateErr = nil
+		st.ValidatedContent = nil
+		st.LastRawJSON = ""
+
+		rawJSON := strings.TrimSpace(extractJSONObject(st.LastAssistant.Content))
+		st.LastRawJSON = rawJSON
+		if rawJSON == "" {
+			st.ValidateErr = fmt.Errorf("empty artifact output")
+			return st, nil
 		}
 
-		content, err := normalizeAndValidateArtifact(st.In.Type, rawJSON)
-		if err != nil {
-			return nil, err
+		switch st.Mode {
+		case artifactOutputModeJSONPatch:
+			patched, err := applyArtifactJSONPatch(st.In.Type, st.In.CurrentArtifactRaw, rawJSON)
+			if err != nil {
+				st.ValidateErr = err
+				return st, nil
+			}
+			content, err := normalizeAndValidateArtifact(st.In.Type, strings.TrimSpace(string(patched)))
+			if err != nil {
+				st.ValidateErr = err
+				return st, nil
+			}
+			st.ValidatedContent = content
+
+		default:
+			content, err := normalizeAndValidateArtifact(st.In.Type, rawJSON)
+			if err != nil {
+				st.ValidateErr = err
+				return st, nil
+			}
+			st.ValidatedContent = content
+		}
+		return st, nil
+	}), compose.WithNodeName("artifact.validate")); err != nil {
+		return nil, err
+	}
+
+	// ---------------------------------------------------------------------
+	// 5. Repair: 校验失败修复节点（Validate → Repair → Re-run）
+	// ---------------------------------------------------------------------
+	// 作用：当解析/校验失败时，向 Messages 追加修复指令并回到 model 重试。
+	// 约束：最多修复 MaxRepairRounds 次，避免死循环与成本失控。
+	if err := graph.AddLambdaNode("repair", compose.InvokableLambda(func(ctx context.Context, st *artifactReActState) (*artifactReActState, error) {
+		if st == nil || st.In == nil || st.LastAssistant == nil {
+			return nil, fmt.Errorf("state is nil")
+		}
+		if st.ValidateErr == nil {
+			return st, nil
+		}
+		if st.RepairRounds >= st.MaxRepairRounds {
+			return nil, st.ValidateErr
+		}
+
+		repairMsg := buildArtifactRepairMessage(st.Mode, st.In.Type, st.ValidateErr, st.LastRawJSON)
+		st.Messages = append(st.Messages, schema.UserMessage(repairMsg))
+		st.RepairRounds++
+		return st, nil
+	}), compose.WithNodeName("artifact.repair")); err != nil {
+		return nil, err
+	}
+
+	// ---------------------------------------------------------------------
+	// 6. Finalize: 结果封装节点
+	// ---------------------------------------------------------------------
+	if err := graph.AddLambdaNode("finalize", compose.InvokableLambda(func(ctx context.Context, st *artifactReActState) (*ArtifactGenerateOutput, error) {
+		if st == nil || st.In == nil || st.LastAssistant == nil {
+			return nil, fmt.Errorf("state is nil")
+		}
+		if st.ValidateErr != nil {
+			return nil, st.ValidateErr
+		}
+		if len(st.ValidatedContent) == 0 {
+			return nil, fmt.Errorf("empty validated content")
 		}
 
 		meta := LLMUsageMeta{
@@ -352,18 +503,32 @@ func (g *ArtifactGenerator) buildGraph(ctx context.Context) (compose.Runnable[*A
 			meta.CompletionTokens = st.LastAssistant.ResponseMeta.Usage.CompletionTokens
 		}
 
+		modelRaw := strings.TrimSpace(st.LastRawJSON)
+		raw := modelRaw
+		if st.Mode == artifactOutputModeJSONPatch {
+			raw = strings.TrimSpace(string(st.ValidatedContent))
+		}
+		if strings.TrimSpace(raw) == "" {
+			raw = strings.TrimSpace(string(st.ValidatedContent))
+		}
+		if strings.TrimSpace(modelRaw) == "" {
+			modelRaw = raw
+		}
+
 		return &ArtifactGenerateOutput{
-			Type:    st.In.Type,
-			Content: content,
-			Raw:     rawJSON,
-			Meta:    meta,
+			Type:     st.In.Type,
+			Content:  st.ValidatedContent,
+			Raw:      raw,
+			ModelRaw: modelRaw,
+			Mode:     string(st.Mode),
+			Meta:     meta,
 		}, nil
 	}), compose.WithNodeName("artifact.finalize")); err != nil {
 		return nil, err
 	}
 
 	// ---------------------------------------------------------------------
-	// 5. Edges & Branches: 定义图的流转逻辑
+	// 7. Edges & Branches: 定义图的流转逻辑
 	// ---------------------------------------------------------------------
 	// 流程：
 	//   START -> init -> model
@@ -372,7 +537,7 @@ func (g *ArtifactGenerator) buildGraph(ctx context.Context) (compose.Runnable[*A
 	//                  /        \
 	//         (有 ToolCalls)    (无 ToolCalls)
 	//               ↓              ↓
-	//             tools         finalize -> END
+	//             tools         validate -> <repair?> -> finalize -> END
 	//               ↓
 	//             model (循环回模型)
 	if err := graph.AddEdge(compose.START, "init"); err != nil {
@@ -384,7 +549,7 @@ func (g *ArtifactGenerator) buildGraph(ctx context.Context) (compose.Runnable[*A
 
 	branch := func(ctx context.Context, st *artifactReActState) (string, error) {
 		if st == nil || st.LastAssistant == nil {
-			return "finalize", nil
+			return "validate", nil
 		}
 		// 如果 LLM 想要调用工具，且未超过最大轮数 -> 进入 tools 节点
 		if len(st.LastAssistant.ToolCalls) > 0 {
@@ -393,14 +558,45 @@ func (g *ArtifactGenerator) buildGraph(ctx context.Context) (compose.Runnable[*A
 			}
 			return "tools", nil
 		}
-		// 否则 -> 进入 finalize 节点结束
-		return "finalize", nil
+		// 否则 -> 进入 validate 节点
+		return "validate", nil
 	}
-	if err := graph.AddBranch("model", compose.NewGraphBranch(branch, map[string]bool{"tools": true, "finalize": true})); err != nil {
+	if err := graph.AddBranch("model", compose.NewGraphBranch(branch, map[string]bool{"tools": true, "validate": true})); err != nil {
 		return nil, err
 	}
 	// 工具执行完后，必须跳回模型节点，让模型看到工具结果并继续生成
 	if err := graph.AddEdge("tools", "model"); err != nil {
+		return nil, err
+	}
+
+	validateBranch := func(ctx context.Context, st *artifactReActState) (string, error) {
+		if st == nil {
+			return "", fmt.Errorf("state is nil")
+		}
+		if st.ValidateErr == nil {
+			return "finalize", nil
+		}
+		// Patch 模式修复耗尽后，自动回退到“全量 JSON 输出”再尝试一次，避免增量模式放大失败率。
+		if st.Mode == artifactOutputModeJSONPatch && !st.FallbackUsed && st.RepairRounds >= st.MaxRepairRounds && len(st.FullMessages) > 0 {
+			st.FallbackUsed = true
+			st.Mode = artifactOutputModeFull
+			st.Messages = cloneMessages(st.FullMessages)
+			st.RepairRounds = 0
+			st.ValidateErr = nil
+			st.ValidatedContent = nil
+			st.LastRawJSON = ""
+			return "model", nil
+		}
+
+		if st.RepairRounds >= st.MaxRepairRounds {
+			return "", st.ValidateErr
+		}
+		return "repair", nil
+	}
+	if err := graph.AddBranch("validate", compose.NewGraphBranch(validateBranch, map[string]bool{"repair": true, "finalize": true, "model": true})); err != nil {
+		return nil, err
+	}
+	if err := graph.AddEdge("repair", "model"); err != nil {
 		return nil, err
 	}
 	if err := graph.AddEdge("finalize", compose.END); err != nil {
@@ -410,7 +606,7 @@ func (g *ArtifactGenerator) buildGraph(ctx context.Context) (compose.Runnable[*A
 	return graph.Compile(ctx, compose.WithGraphName("artifact_generate_graph"))
 }
 
-func buildArtifactModelOptions(in *ArtifactGenerateInput, enableSchema bool) []model.Option {
+func buildArtifactModelOptions(in *ArtifactGenerateInput, enableSchema bool, mode artifactOutputMode) []model.Option {
 	opts := make([]model.Option, 0, 4)
 
 	if in.Temperature != nil {
@@ -424,13 +620,17 @@ func buildArtifactModelOptions(in *ArtifactGenerateInput, enableSchema bool) []m
 	}
 
 	if enableSchema {
-		schemaObj := artifactJSONSchema(in.Type)
+		schemaObj := artifactJSONSchemaForMode(in.Type, mode)
 		if schemaObj != nil {
+			name := fmt.Sprintf("artifact_%s", in.Type)
+			if mode == artifactOutputModeJSONPatch {
+				name = fmt.Sprintf("artifact_patch_%s", in.Type)
+			}
 			opts = append(opts, openaiopts.WithExtraFields(map[string]any{
 				"response_format": map[string]any{
 					"type": "json_schema",
 					"json_schema": map[string]any{
-						"name":   fmt.Sprintf("artifact_%s", in.Type),
+						"name":   name,
 						"strict": false,
 						"schema": schemaObj,
 					},
@@ -440,6 +640,45 @@ func buildArtifactModelOptions(in *ArtifactGenerateInput, enableSchema bool) []m
 	}
 
 	return opts
+}
+
+func artifactJSONSchemaForMode(t entity.ArtifactType, mode artifactOutputMode) map[string]any {
+	if mode == artifactOutputModeJSONPatch {
+		return artifactJSONPatchSchema(t)
+	}
+	return artifactJSONSchema(t)
+}
+
+func artifactJSONPatchSchema(t entity.ArtifactType) map[string]any {
+	paths := artifactJSONPatchAllowedPaths(t)
+	if len(paths) == 0 {
+		return nil
+	}
+
+	enumPaths := make([]any, 0, len(paths))
+	for i := range paths {
+		enumPaths = append(enumPaths, paths[i])
+	}
+
+	return map[string]any{
+		"type": "array",
+		"items": map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"required":             []any{"op", "path", "value"},
+			"properties": map[string]any{
+				"op": map[string]any{
+					"type": "string",
+					"enum": []any{"add", "replace"},
+				},
+				"path": map[string]any{
+					"type": "string",
+					"enum": enumPaths,
+				},
+				"value": map[string]any{},
+			},
+		},
+	}
 }
 
 func pickArtifactModel(in *ArtifactGenerateInput) string {
@@ -644,4 +883,55 @@ func isToolsUnsupportedError(err error) bool {
 	default:
 		return false
 	}
+}
+
+func buildArtifactRepairMessage(mode artifactOutputMode, t entity.ArtifactType, err error, rawJSON string) string {
+	switch mode {
+	case artifactOutputModeJSONPatch:
+		return buildArtifactJSONPatchRepairMessage(t, err, rawJSON)
+	default:
+		return buildArtifactFullJSONRepairMessage(t, err, rawJSON)
+	}
+}
+
+func buildArtifactFullJSONRepairMessage(t entity.ArtifactType, err error, rawJSON string) string {
+	raw := strings.TrimSpace(rawJSON)
+	if raw == "" {
+		raw = "{}"
+	}
+	raw = truncateByRunes(raw, 20000)
+
+	errText := ""
+	if err != nil {
+		errText = strings.TrimSpace(err.Error())
+	}
+
+	return fmt.Sprintf(
+		"上一次输出未通过服务端解析/校验，请你只做格式与字段修复，并重新输出“完整新版本 JSON”。\n\n要求：\n1) 只输出 JSON（不要 Markdown、不要代码块）。\n2) 必须可被 json.Unmarshal 解析。\n3) 保持已有 key 不变（仅新增对象时创建新 key）。\n4) 不要改变用户意图，只修复错误。\n\nartifact_type=%s\nerror=%s\n\n上一次输出（供修复）：\n%s",
+		strings.TrimSpace(string(t)),
+		errText,
+		raw,
+	)
+}
+
+func buildArtifactJSONPatchRepairMessage(t entity.ArtifactType, err error, rawJSON string) string {
+	raw := strings.TrimSpace(rawJSON)
+	if raw == "" {
+		raw = "[]"
+	}
+	raw = truncateByRunes(raw, 20000)
+
+	errText := ""
+	if err != nil {
+		errText = strings.TrimSpace(err.Error())
+	}
+
+	allowedPaths := strings.Join(artifactJSONPatchAllowedPaths(t), ", ")
+	return fmt.Sprintf(
+		"上一次 JSON Patch 未通过服务端解析/应用/校验，请你只做 patch 修复，并重新输出 JSON Patch 数组。\n\n要求：\n1) 只输出 JSON Patch 数组（不要 Markdown、不要代码块）。\n2) op 只允许 add 或 replace，且每个 op 必须包含 op/path/value。\n3) path 只允许：%s\n4) 不要改变用户意图，只修复错误。\n\nartifact_type=%s\nerror=%s\n\n上一次输出（供修复）：\n%s",
+		allowedPaths,
+		strings.TrimSpace(string(t)),
+		errText,
+		raw,
+	)
 }

@@ -1,0 +1,26 @@
+项目标题：{project_title}
+
+项目简介：
+{project_description}
+
+任务：{artifact_type}
+
+当前版本 JSON（用于生成 patch）：
+{current_artifact_json}
+
+历史摘要（可能为空）：
+{conversation_summary}
+
+最近用户指令（可能为空）：
+{recent_user_turns}
+
+用户本轮需求：
+{prompt}
+
+{attachments_block}
+
+允许的 patch 约束：
+- op 仅允许：{allowed_ops}
+- path 仅允许：{allowed_paths}
+
+提示：如需查看其它设定，请调用工具 `artifact_get_active` 或 `artifact_search` 获取相关 JSON 片段；不要一次性请求所有内容。

@@ -16,9 +16,11 @@ var templatesFS embed.FS
 type PromptID string
 
 const (
-	PromptFoundationPlanV1   PromptID = "foundation_plan_v1"
-	PromptArtifactV1         PromptID = "artifact_v1"
-	PromptProjectCreationV1  PromptID = "project_creation_v1"
+	PromptFoundationPlanV1  PromptID = "foundation_plan_v1"
+	PromptArtifactV1        PromptID = "artifact_v1"
+	PromptArtifactV2        PromptID = "artifact_v2"
+	PromptArtifactPatchV1   PromptID = "artifact_patch_v1"
+	PromptProjectCreationV1 PromptID = "project_creation_v1"
 )
 
 type Registry struct {
@@ -78,6 +80,10 @@ func resolvePromptFiles(id PromptID) (systemFile string, userFile string, err er
 		return "templates/foundation_plan_v1.system.txt", "templates/foundation_plan_v1.user.txt", nil
 	case PromptArtifactV1:
 		return "templates/artifact_v1.system.txt", "templates/artifact_v1.user.txt", nil
+	case PromptArtifactV2:
+		return "templates/artifact_v2.system.txt", "templates/artifact_v2.user.txt", nil
+	case PromptArtifactPatchV1:
+		return "templates/artifact_patch_v1.system.txt", "templates/artifact_patch_v1.user.txt", nil
 	case PromptProjectCreationV1:
 		return "templates/project_creation_v1.system.txt", "templates/project_creation_v1.user.txt", nil
 	default:

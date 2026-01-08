@@ -8,7 +8,6 @@ package wire
 
 import (
 	"context"
-	"github.com/google/wire"
 	"z-novel-ai-api/internal/application/quota"
 	"z-novel-ai-api/internal/application/story"
 	"z-novel-ai-api/internal/config"
@@ -21,6 +20,8 @@ import (
 	"z-novel-ai-api/internal/interfaces/http/handler"
 	"z-novel-ai-api/internal/interfaces/http/middleware"
 	"z-novel-ai-api/internal/interfaces/http/router"
+
+	"github.com/google/wire"
 )
 
 // Injectors from wire.go:
@@ -166,6 +167,7 @@ func InitializeApp(ctx context.Context, cfg *config.Config) (*router.Router, fun
 		cleanup()
 		return nil, nil, err
 	}
+	cache := redis.NewCache(redisClient)
 	producer := ProvideMessagingProducer(redisClient, cfg)
 	chapterHandler := handler.NewChapterHandler(chapterRepository, projectRepository, jobRepository, producer)
 	entityRepository := postgres.NewEntityRepository(client)
@@ -182,7 +184,7 @@ func InitializeApp(ctx context.Context, cfg *config.Config) (*router.Router, fun
 	conversationTurnRepository := postgres.NewConversationTurnRepository(client)
 	artifactRepository := postgres.NewArtifactRepository(client)
 	artifactGenerator := story.NewArtifactGenerator(einoFactory)
-	conversationHandler := handler.NewConversationHandler(cfg, txManager, tenantContext, tenantRepository, projectRepository, jobRepository, conversationSessionRepository, conversationTurnRepository, artifactRepository, tokenQuotaChecker, artifactGenerator)
+	conversationHandler := handler.NewConversationHandler(cfg, txManager, tenantContext, tenantRepository, projectRepository, jobRepository, conversationSessionRepository, conversationTurnRepository, artifactRepository, cache, tokenQuotaChecker, artifactGenerator)
 	projectCreationSessionRepository := postgres.NewProjectCreationSessionRepository(client)
 	projectCreationTurnRepository := postgres.NewProjectCreationTurnRepository(client)
 	llmUsageEventRepository := postgres.NewLLMUsageEventRepository(client)

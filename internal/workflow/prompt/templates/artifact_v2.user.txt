@@ -1,0 +1,21 @@
+项目标题：{project_title}
+
+项目简介：
+{project_description}
+
+任务：{artifact_type}
+
+历史摘要（可能为空）：
+{conversation_summary}
+
+最近用户指令（可能为空）：
+{recent_user_turns}
+
+用户本轮需求：
+{prompt}
+
+{attachments_block}
+
+提示：如需查看当前设定，请调用工具 `artifact_get_active` 或 `artifact_search` 获取相关 JSON 片段或完整内容，再输出“完整新版本 JSON”。
+
+{current_hint}

@@ -395,37 +395,44 @@ func extractJSONObject(s string) string {
 		return raw
 	}
 
-	// 如果模型输出夹杂了其它文本，尽量截取第一个 JSON 对象。
-	start := strings.Index(raw, "{")
-	end := strings.LastIndex(raw, "}")
+	// 如果模型输出夹杂了其它文本，尽量截取第一个 JSON 值（对象/数组）。
+	objStart := strings.Index(raw, "{")
+	arrStart := strings.Index(raw, "[")
+	start := -1
+	end := -1
+	switch {
+	case objStart >= 0 && (arrStart < 0 || objStart < arrStart):
+		start = objStart
+		end = strings.LastIndex(raw, "}")
+	case arrStart >= 0:
+		start = arrStart
+		end = strings.LastIndex(raw, "]")
+	}
 	if start >= 0 && end > start {
 		raw = raw[start : end+1]
 	}
 
-	// 简单校验：确保至少能被 Decoder 消费到一个 object 起始。
+	// 简单校验：确保至少能被 Decoder 消费到一个 JSON 起始。
 	dec := json.NewDecoder(strings.NewReader(raw))
 	dec.UseNumber()
 	tok, err := dec.Token()
 	if err == nil {
-		if d, ok := tok.(json.Delim); ok && d == '{' {
+		if d, ok := tok.(json.Delim); ok && (d == '{' || d == '[') {
 			return raw
 		}
 	}
 
 	// 最后兜底：尝试读取到 EOF 为止，避免调用方误用。
-	var b strings.Builder
 	dec = json.NewDecoder(strings.NewReader(raw))
 	for {
-		t, e := dec.Token()
+		_, e := dec.Token()
 		if e != nil {
 			if errors.Is(e, io.EOF) {
 				break
 			}
 			return strings.TrimSpace(s)
 		}
-		_ = t
 	}
-	_ = b
 	return raw
 }
 
