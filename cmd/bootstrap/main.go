@@ -6,12 +6,16 @@ import (
 	"log"
 	"os"
 
+	"github.com/joho/godotenv"
+
 	"z-novel-ai-api/internal/config"
 	"z-novel-ai-api/internal/domain/entity"
 	"z-novel-ai-api/internal/wire"
 )
 
 func main() {
+	_ = godotenv.Load()
+
 	fmt.Println("Starting system bootstrap...")
 
 	// 1. 加载配置
@@ -22,8 +26,8 @@ func main() {
 
 	ctx := context.Background()
 
-	// 2. 初始化数据层
-	dataLayer, cleanup, err := wire.InitializeDataLayer(ctx, cfg)
+	// 2. 初始化数据层（仅 PostgreSQL）
+	dataLayer, cleanup, err := wire.InitializePostgresOnly(ctx, cfg)
 	if err != nil {
 		log.Fatalf("failed to initialize data layer: %v", err)
 	}
@@ -57,11 +61,11 @@ func main() {
 	// 4. 创建首个管理员
 	adminEmail := os.Getenv("BOOTSTRAP_ADMIN_EMAIL")
 	if adminEmail == "" {
-		adminEmail = "admin@example.com"
+		adminEmail = "admin@nsxzhou.fun"
 	}
 	adminPassword := os.Getenv("BOOTSTRAP_ADMIN_PASSWORD")
 	if adminPassword == "" {
-		adminPassword = "admin-password-123" // 生产环境请务必通过环境变量设置
+		adminPassword = "admin123" // 生产环境请务必通过环境变量设置
 	}
 
 	userExists, err := dataLayer.UserRepo.ExistsByEmail(ctx, tenantID, adminEmail)
