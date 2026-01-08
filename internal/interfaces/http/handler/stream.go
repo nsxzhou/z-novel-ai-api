@@ -2,8 +2,6 @@
 package handler
 
 import (
-	"context"
-	"fmt"
 	"io"
 
 	storyv1 "z-novel-ai-api/api/proto/gen/go/story"
@@ -49,18 +47,6 @@ func NewStreamHandler(
 // @Router /v1/chapters/{cid}/stream [get]
 func (h *StreamHandler) StreamChapter(c *gin.Context) {
 	dto.Error(c, 501, "chapter streaming not implemented")
-}
-
-func (h *StreamHandler) withTenantTx(ctx context.Context, tenantID string, fn func(context.Context) error) error {
-	if h.txMgr == nil || h.tenantCtx == nil {
-		return fmt.Errorf("transaction dependencies not configured")
-	}
-	return h.txMgr.WithTransaction(ctx, func(txCtx context.Context) error {
-		if err := h.tenantCtx.SetTenant(txCtx, tenantID); err != nil {
-			return err
-		}
-		return fn(txCtx)
-	})
 }
 
 // StreamGenerate 流式生成内容（内部方法）

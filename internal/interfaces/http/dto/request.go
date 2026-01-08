@@ -118,9 +118,34 @@ type TenantIDRequest struct {
 	TenantID string `uri:"tid" binding:"required"`
 }
 
+// SessionIDRequest 会话 ID 请求
+type SessionIDRequest struct {
+	SessionID string `uri:"sid" binding:"required"`
+}
+
+// ArtifactIDRequest 构件 ID 请求
+type ArtifactIDRequest struct {
+	ArtifactID string `uri:"aid" binding:"required"`
+}
+
 // BindProjectID 从 URI 绑定项目 ID
 func BindProjectID(c *gin.Context) string {
 	return c.Param("pid")
+}
+
+// BindSessionID 从 URI 绑定会话 ID
+func BindSessionID(c *gin.Context) string {
+	return c.Param("sid")
+}
+
+// BindProjectCreationSessionID 从 URI 绑定对话创建项目会话 ID
+func BindProjectCreationSessionID(c *gin.Context) string {
+	return c.Param("sid")
+}
+
+// BindArtifactID 从 URI 绑定构件 ID
+func BindArtifactID(c *gin.Context) string {
+	return c.Param("aid")
 }
 
 // BindChapterID 从 URI 绑定章节 ID

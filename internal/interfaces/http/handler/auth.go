@@ -2,6 +2,7 @@
 package handler
 
 import (
+	"net/http"
 	"time"
 
 	"z-novel-ai-api/internal/domain/entity"
@@ -113,6 +114,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	}
 
 	// 设置 RefreshToken 到 Cookie
+	c.SetSameSite(http.SameSiteStrictMode)
 	c.SetCookie("refresh_token", tokens.RefreshToken, int(7*24*time.Hour.Seconds()), "/v1/auth/refresh", "", false, true)
 
 	dto.Created(c, &dto.AuthResponse{
@@ -173,6 +175,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
+	c.SetSameSite(http.SameSiteStrictMode)
 	c.SetCookie("refresh_token", tokens.RefreshToken, int(7*24*time.Hour.Seconds()), "/v1/auth/refresh", "", false, true)
 
 	dto.Success(c, &dto.AuthResponse{
