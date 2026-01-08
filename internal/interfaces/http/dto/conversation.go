@@ -66,7 +66,23 @@ type TurnListResponse struct {
 
 type SendMessageRequest struct {
 	Task string `json:"task,omitempty"`
+
+	// 分支（多分支创作）：为空表示 main 分支。
+	BranchKey string `json:"branch_key,omitempty"`
+	// 是否将本次生成结果设为激活版本；默认：main=true，非 main=false。
+	Activate *bool `json:"activate,omitempty"`
+	// 是否启用“设定冲突扫描”；默认 true。
+	EnableConflictScan *bool `json:"enable_conflict_scan,omitempty"`
+
 	ConversationMessageRequest
+}
+
+type SettingConflictWarning struct {
+	Severity    string `json:"severity"`
+	Message     string `json:"message"`
+	ExistingRef string `json:"existing_ref,omitempty"`
+	NewRef      string `json:"new_ref,omitempty"`
+	Suggestion  string `json:"suggestion,omitempty"`
 }
 
 type ArtifactSnapshotResponse struct {
@@ -84,5 +100,6 @@ type SendMessageResponse struct {
 	AssistantMessage string                    `json:"assistant_message"`
 	JobID            string                    `json:"job_id"`
 	ArtifactSnapshot *ArtifactSnapshotResponse `json:"artifact_snapshot,omitempty"`
+	ConflictWarnings []*SettingConflictWarning `json:"conflict_warnings,omitempty"`
 	Usage            *FoundationUsageResponse  `json:"usage,omitempty"`
 }

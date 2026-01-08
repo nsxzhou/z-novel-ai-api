@@ -2,6 +2,7 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -258,9 +259,16 @@ func (h *ConversationHandler) SendMessage(c *gin.Context) {
 	var currentCharacters json.RawMessage
 	var currentOutline json.RawMessage
 	var currentArtifact json.RawMessage
+	var baseVersionID *string
 
 	requestID := c.GetString("request_id")
 	traceID := c.GetString("trace_id")
+
+	branchKey, activate, enableConflictScan, err := normalizeBranchOptions(req.BranchKey, req.Activate, req.EnableConflictScan)
+	if err != nil {
+		dto.BadRequest(c, err.Error())
+		return
+	}
 
 	if err := withTenantTx(ctx, h.txMgr, h.tenantCtx, tenantID, func(txCtx context.Context) error {
 		var loadErr error
@@ -381,9 +389,57 @@ func (h *ConversationHandler) SendMessage(c *gin.Context) {
 		if loadErr != nil {
 			return loadErr
 		}
-		currentArtifact, loadErr = loadActive(artifactType)
+
+		loadBase := func(t entity.ArtifactType) (json.RawMessage, *string, error) {
+			a := typeKeyByArtifactType[t]
+			if a == nil {
+				return nil, nil, nil
+			}
+
+			var v *entity.ArtifactVersion
+			if branchKey != "" && branchKey != "main" {
+				v, loadErr = h.artifactRepo.GetLatestVersionByBranch(txCtx, a.ID, branchKey)
+				if loadErr != nil {
+					return nil, nil, loadErr
+				}
+				if v == nil && a.ActiveVersionID != nil && strings.TrimSpace(*a.ActiveVersionID) != "" {
+					v, loadErr = h.artifactRepo.GetVersionByID(txCtx, *a.ActiveVersionID)
+					if loadErr != nil {
+						return nil, nil, loadErr
+					}
+				}
+			} else if a.ActiveVersionID != nil && strings.TrimSpace(*a.ActiveVersionID) != "" {
+				v, loadErr = h.artifactRepo.GetVersionByID(txCtx, *a.ActiveVersionID)
+				if loadErr != nil {
+					return nil, nil, loadErr
+				}
+			}
+
+			if v == nil {
+				return nil, nil, nil
+			}
+			id := v.ID
+			return v.Content, &id, nil
+		}
+
+		currentArtifact, baseVersionID, loadErr = loadBase(artifactType)
 		if loadErr != nil {
 			return loadErr
+		}
+
+		// 分支默认激活策略：如果是首次生成（无基线版本），默认激活，避免构件长期无 active_version。
+		if req.Activate == nil && baseVersionID == nil {
+			activate = true
+		}
+
+		// 目标类型本身也要作为上下文工具可读的“当前版本”。
+		switch artifactType {
+		case entity.ArtifactTypeWorldview:
+			currentWorldview = currentArtifact
+		case entity.ArtifactTypeCharacters:
+			currentCharacters = currentArtifact
+		case entity.ArtifactTypeOutline:
+			currentOutline = currentArtifact
 		}
 
 		return nil
@@ -447,6 +503,43 @@ func (h *ConversationHandler) SendMessage(c *gin.Context) {
 		return
 	}
 
+	var conflictWarnings []*dto.SettingConflictWarning
+	if enableConflictScan && hasAnyArtifactContext(project, currentWorldview, currentCharacters, currentOutline, currentArtifact) {
+		scanOut, scanErr := h.generator.ScanConflicts(ctx, &story.ArtifactConflictScanInput{
+			ProjectTitle:       project.Title,
+			ProjectDescription: project.Description,
+			ProjectGenre:       project.Genre,
+			Type:               out.Type,
+			CurrentWorldview:   currentWorldview,
+			CurrentCharacters:  currentCharacters,
+			CurrentOutline:     currentOutline,
+			CurrentArtifact:    currentArtifact,
+			NewArtifact:        out.Content,
+			Provider:           provider,
+			Model:              model,
+			Temperature:        req.Temperature,
+			MaxTokens:          req.MaxTokens,
+		})
+		if scanErr != nil {
+			logger.Warn(ctx, "artifact conflict scan failed",
+				"error", scanErr.Error(),
+				"artifact_type", string(out.Type),
+			)
+		} else if scanOut != nil && len(scanOut.Conflicts) > 0 {
+			conflictWarnings = make([]*dto.SettingConflictWarning, 0, len(scanOut.Conflicts))
+			for i := range scanOut.Conflicts {
+				cf := scanOut.Conflicts[i]
+				conflictWarnings = append(conflictWarnings, &dto.SettingConflictWarning{
+					Severity:    string(cf.Severity),
+					Message:     cf.Message,
+					ExistingRef: cf.ExistingRef,
+					NewRef:      cf.NewRef,
+					Suggestion:  cf.Suggestion,
+				})
+			}
+		}
+	}
+
 	var snapshot *dto.ArtifactSnapshotResponse
 	if err := withTenantTx(ctx, h.txMgr, h.tenantCtx, tenantID, func(txCtx context.Context) error {
 		session, err := h.sessionRepo.GetByIDForUpdate(txCtx, sessionID)
@@ -473,21 +566,26 @@ func (h *ConversationHandler) SendMessage(c *gin.Context) {
 		sourceJobID := jobID
 
 		version := &entity.ArtifactVersion{
-			ID:          versionID,
-			ArtifactID:  art.ID,
-			VersionNo:   nextNo,
-			Content:     out.Content,
-			CreatedBy:   &createdBy,
-			SourceJobID: &sourceJobID,
+			ID:              versionID,
+			ArtifactID:      art.ID,
+			VersionNo:       nextNo,
+			BranchKey:       branchKey,
+			ParentVersionID: baseVersionID,
+			Content:         out.Content,
+			CreatedBy:       &createdBy,
+			SourceJobID:     &sourceJobID,
 		}
 		if err := h.artifactRepo.CreateVersion(txCtx, version); err != nil {
 			return err
 		}
-		if err := h.artifactRepo.SetActiveVersion(txCtx, art.ID, version.ID); err != nil {
-			return err
+
+		if activate {
+			if err := h.artifactRepo.SetActiveVersion(txCtx, art.ID, version.ID); err != nil {
+				return err
+			}
 		}
 
-		if out.Type == entity.ArtifactTypeNovelFoundation {
+		if activate && out.Type == entity.ArtifactTypeNovelFoundation {
 			var payload struct {
 				Title       string `json:"title"`
 				Description string `json:"description"`
@@ -518,6 +616,9 @@ func (h *ConversationHandler) SendMessage(c *gin.Context) {
 			"artifact_id":       art.ID,
 			"version_id":        version.ID,
 			"version_no":        version.VersionNo,
+			"branch_key":        branchKey,
+			"parent_version_id": baseVersionID,
+			"activated":         activate,
 			"provider":          out.Meta.Provider,
 			"model":             out.Meta.Model,
 			"generation_mode":   out.Mode,
@@ -531,6 +632,9 @@ func (h *ConversationHandler) SendMessage(c *gin.Context) {
 		}
 		if strings.TrimSpace(out.Mode) == "json_patch" && strings.TrimSpace(out.ModelRaw) != "" {
 			metaObj["model_raw"] = out.ModelRaw
+		}
+		if len(conflictWarnings) > 0 {
+			metaObj["conflict_warnings"] = conflictWarnings
 		}
 		assistantMeta, _ := json.Marshal(metaObj)
 		assistantTurn := entity.NewConversationTurn(sessionID, entity.RoleAssistant, task, out.Raw, assistantMeta)
@@ -579,6 +683,7 @@ func (h *ConversationHandler) SendMessage(c *gin.Context) {
 		AssistantMessage: out.Raw,
 		JobID:            jobID,
 		ArtifactSnapshot: snapshot,
+		ConflictWarnings: conflictWarnings,
 		Usage: &dto.FoundationUsageResponse{
 			Provider:         out.Meta.Provider,
 			Model:            out.Meta.Model,
@@ -589,6 +694,73 @@ func (h *ConversationHandler) SendMessage(c *gin.Context) {
 			GeneratedAt:      out.Meta.GeneratedAt.Format(time.RFC3339),
 		},
 	})
+}
+
+func normalizeBranchOptions(branchKey string, activate *bool, enableConflictScan *bool) (normalizedBranch string, normalizedActivate bool, normalizedScan bool, err error) {
+	bk := strings.TrimSpace(branchKey)
+	if bk == "" {
+		bk = "main"
+	}
+	if len(bk) > 64 {
+		return "", false, false, fmt.Errorf("branch_key too long")
+	}
+	if !isValidBranchKey(bk) {
+		return "", false, false, fmt.Errorf("invalid branch_key: %s", bk)
+	}
+
+	if activate != nil {
+		normalizedActivate = *activate
+	} else {
+		normalizedActivate = bk == "main"
+	}
+
+	if enableConflictScan != nil {
+		normalizedScan = *enableConflictScan
+	} else {
+		normalizedScan = true
+	}
+
+	return bk, normalizedActivate, normalizedScan, nil
+}
+
+func isValidBranchKey(s string) bool {
+	if strings.TrimSpace(s) == "" {
+		return false
+	}
+	for i, r := range s {
+		if i == 0 {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+				continue
+			}
+			return false
+		}
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func hasAnyArtifactContext(project *entity.Project, worldview, characters, outline, currentArtifact json.RawMessage) bool {
+	if project != nil {
+		if strings.TrimSpace(project.Title) != "" || strings.TrimSpace(project.Description) != "" || strings.TrimSpace(project.Genre) != "" {
+			return true
+		}
+	}
+	if len(bytes.TrimSpace(worldview)) > 0 {
+		return true
+	}
+	if len(bytes.TrimSpace(characters)) > 0 {
+		return true
+	}
+	if len(bytes.TrimSpace(outline)) > 0 {
+		return true
+	}
+	if len(bytes.TrimSpace(currentArtifact)) > 0 {
+		return true
+	}
+	return false
 }
 
 func (h *ConversationHandler) writeQuotaError(c *gin.Context, err error) {

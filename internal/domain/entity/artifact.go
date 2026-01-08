@@ -31,13 +31,15 @@ func (ProjectArtifact) TableName() string {
 }
 
 type ArtifactVersion struct {
-	ID          string          `json:"id" gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
-	ArtifactID  string          `json:"artifact_id" gorm:"type:uuid;index;not null"`
-	VersionNo   int             `json:"version_no" gorm:"not null"`
-	Content     json.RawMessage `json:"content" gorm:"type:jsonb;not null"`
-	CreatedBy   *string         `json:"created_by,omitempty" gorm:"type:uuid"`
-	SourceJobID *string         `json:"source_job_id,omitempty" gorm:"type:uuid"`
-	CreatedAt   time.Time       `json:"created_at" gorm:"autoCreateTime"`
+	ID              string          `json:"id" gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
+	ArtifactID      string          `json:"artifact_id" gorm:"type:uuid;index;not null"`
+	VersionNo       int             `json:"version_no" gorm:"not null"`
+	BranchKey       string          `json:"branch_key" gorm:"type:varchar(64);not null;default:'main'"`
+	ParentVersionID *string         `json:"parent_version_id,omitempty" gorm:"type:uuid"`
+	Content         json.RawMessage `json:"content" gorm:"type:jsonb;not null"`
+	CreatedBy       *string         `json:"created_by,omitempty" gorm:"type:uuid"`
+	SourceJobID     *string         `json:"source_job_id,omitempty" gorm:"type:uuid"`
+	CreatedAt       time.Time       `json:"created_at" gorm:"autoCreateTime"`
 }
 
 func (ArtifactVersion) TableName() string {

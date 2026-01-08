@@ -1,0 +1,14 @@
+项目标题：{{project_title}}
+项目简介：{{project_description}}
+当前构件类型：{{artifact_type}}
+
+已有设定（可能为空）：
+- 小说基底（project）：{{project_brief_json}}
+- 世界观：{{current_worldview_json}}
+- 角色：{{current_characters_json}}
+- 大纲：{{current_outline_json}}
+- 当前构件上一版：{{current_artifact_json}}
+
+新生成的构件 JSON（待审校）：{{new_artifact_json}}
+
+请输出 conflicts JSON。

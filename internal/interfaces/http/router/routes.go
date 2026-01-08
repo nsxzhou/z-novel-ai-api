@@ -83,6 +83,8 @@ func RegisterV1Routes(
 		// 构件版本（读：project:read；回滚：project:write）
 		projects.GET("/:pid/artifacts", middleware.RequirePermission(middleware.PermProjectRead), artifactHandler.ListArtifacts)
 		projects.GET("/:pid/artifacts/:aid/versions", middleware.RequirePermission(middleware.PermProjectRead), artifactHandler.ListVersions)
+		projects.GET("/:pid/artifacts/:aid/branches", middleware.RequirePermission(middleware.PermProjectRead), artifactHandler.ListBranches)
+		projects.GET("/:pid/artifacts/:aid/compare", middleware.RequirePermission(middleware.PermProjectRead), artifactHandler.CompareVersions)
 		projects.POST("/:pid/artifacts/:aid/rollback", middleware.RequirePermission(middleware.PermProjectWrite), artifactHandler.Rollback)
 
 		// 实体写操作

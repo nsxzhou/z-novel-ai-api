@@ -17,7 +17,12 @@ type ArtifactRepository interface {
 	CreateVersion(ctx context.Context, version *entity.ArtifactVersion) error
 	GetLatestVersionNo(ctx context.Context, artifactID string) (int, error)
 	GetVersionByID(ctx context.Context, id string) (*entity.ArtifactVersion, error)
-	ListVersions(ctx context.Context, artifactID string, pagination Pagination) (*PagedResult[*entity.ArtifactVersion], error)
+	// ListVersions 列出版本；branchKey 为空表示不过滤
+	ListVersions(ctx context.Context, artifactID string, branchKey string, pagination Pagination) (*PagedResult[*entity.ArtifactVersion], error)
+	// GetLatestVersionByBranch 获取指定分支的最新版本；不存在返回 nil
+	GetLatestVersionByBranch(ctx context.Context, artifactID string, branchKey string) (*entity.ArtifactVersion, error)
+	// ListBranchHeads 返回每个分支的最新版本（按 branch_key 聚合）
+	ListBranchHeads(ctx context.Context, artifactID string) ([]*entity.ArtifactVersion, error)
 
 	// SetActiveVersion 设置激活版本
 	SetActiveVersion(ctx context.Context, artifactID, versionID string) error

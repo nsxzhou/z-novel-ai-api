@@ -128,12 +128,15 @@ func (r *ArtifactRepository) GetVersionByID(ctx context.Context, id string) (*en
 	return &v, nil
 }
 
-func (r *ArtifactRepository) ListVersions(ctx context.Context, artifactID string, pagination repository.Pagination) (*repository.PagedResult[*entity.ArtifactVersion], error) {
+func (r *ArtifactRepository) ListVersions(ctx context.Context, artifactID string, branchKey string, pagination repository.Pagination) (*repository.PagedResult[*entity.ArtifactVersion], error) {
 	ctx, span := tracer.Start(ctx, "postgres.ArtifactRepository.ListVersions")
 	defer span.End()
 
 	db := getDB(ctx, r.client.db)
 	query := db.Model(&entity.ArtifactVersion{}).Where("artifact_id = ?", artifactID)
+	if branchKey != "" {
+		query = query.Where("branch_key = ?", branchKey)
+	}
 
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
@@ -151,6 +154,41 @@ func (r *ArtifactRepository) ListVersions(ctx context.Context, artifactID string
 	}
 
 	return repository.NewPagedResult(versions, total, pagination), nil
+}
+
+func (r *ArtifactRepository) GetLatestVersionByBranch(ctx context.Context, artifactID string, branchKey string) (*entity.ArtifactVersion, error) {
+	ctx, span := tracer.Start(ctx, "postgres.ArtifactRepository.GetLatestVersionByBranch")
+	defer span.End()
+
+	db := getDB(ctx, r.client.db)
+	var v entity.ArtifactVersion
+	if err := db.Where("artifact_id = ? AND branch_key = ?", artifactID, branchKey).Order("version_no DESC").First(&v).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		span.RecordError(err)
+		return nil, fmt.Errorf("failed to get latest artifact version by branch: %w", err)
+	}
+	return &v, nil
+}
+
+func (r *ArtifactRepository) ListBranchHeads(ctx context.Context, artifactID string) ([]*entity.ArtifactVersion, error) {
+	ctx, span := tracer.Start(ctx, "postgres.ArtifactRepository.ListBranchHeads")
+	defer span.End()
+
+	db := getDB(ctx, r.client.db)
+	var versions []*entity.ArtifactVersion
+	if err := db.Raw(`
+SELECT DISTINCT ON (branch_key)
+    id, artifact_id, version_no, branch_key, parent_version_id, created_by, source_job_id, created_at
+FROM artifact_versions
+WHERE artifact_id = ?
+ORDER BY branch_key, version_no DESC;
+`, artifactID).Scan(&versions).Error; err != nil {
+		span.RecordError(err)
+		return nil, fmt.Errorf("failed to list artifact branch heads: %w", err)
+	}
+	return versions, nil
 }
 
 func (r *ArtifactRepository) SetActiveVersion(ctx context.Context, artifactID, versionID string) error {
