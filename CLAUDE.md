@@ -184,7 +184,6 @@ JWT_SECRET="dev-secret" FEATURES_CORE_ENABLED=false go run ./cmd/api-gateway
 - `api/openapi`：为空目录。
 - `test/`：仅目录骨架，无测试用例。
 - **动态 RBAC**：当前权限模型为硬编码（静态）。
-- **Patch 扩展**：`characters/outline` 的增量编辑策略未启用（数组型 JSON Pointer 易脆）。
 - **上下文自动摘要（LLM/结构化）**：当前为轻量滚动压缩，后续可升级为更强语义压缩。
 
 ---

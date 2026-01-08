@@ -16,7 +16,7 @@ func isArtifactJSONPatchEnabled(in *ArtifactGenerateInput) bool {
 		return false
 	}
 	switch in.Type {
-	case entity.ArtifactTypeNovelFoundation, entity.ArtifactTypeWorldview:
+	case entity.ArtifactTypeNovelFoundation, entity.ArtifactTypeWorldview, entity.ArtifactTypeCharacters, entity.ArtifactTypeOutline:
 		return len(bytes.TrimSpace(in.CurrentArtifactRaw)) > 0
 	default:
 		return false
@@ -33,6 +33,10 @@ func artifactJSONPatchAllowedPaths(t entity.ArtifactType) []string {
 		return []string{"/title", "/description", "/genre"}
 	case entity.ArtifactTypeWorldview:
 		return []string{"/genre", "/target_word_count", "/writing_style", "/pov", "/temperature", "/world_bible", "/world_settings"}
+	case entity.ArtifactTypeCharacters:
+		return []string{"/entities", "/relations"}
+	case entity.ArtifactTypeOutline:
+		return []string{"/volumes"}
 	default:
 		return nil
 	}
