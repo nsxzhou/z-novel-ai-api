@@ -2,37 +2,53 @@
 package handler
 
 import (
+	"encoding/json"
+	stderrors "errors"
 	"net/http"
+	"strings"
 
+	"z-novel-ai-api/internal/application/quota"
+	"z-novel-ai-api/internal/config"
+	"z-novel-ai-api/internal/domain/entity"
 	"z-novel-ai-api/internal/domain/repository"
 	"z-novel-ai-api/internal/infrastructure/messaging"
 	"z-novel-ai-api/internal/interfaces/http/dto"
+	"z-novel-ai-api/internal/interfaces/http/middleware"
 	"z-novel-ai-api/pkg/errors"
 	"z-novel-ai-api/pkg/logger"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 // ChapterHandler 章节处理器
 type ChapterHandler struct {
+	cfg *config.Config
+
 	chapterRepo repository.ChapterRepository
 	projectRepo repository.ProjectRepository
 	jobRepo     repository.JobRepository
 	producer    *messaging.Producer
+
+	quotaChecker *quota.TokenQuotaChecker
 }
 
 // NewChapterHandler 创建章节处理器
 func NewChapterHandler(
+	cfg *config.Config,
 	chapterRepo repository.ChapterRepository,
 	projectRepo repository.ProjectRepository,
 	jobRepo repository.JobRepository,
 	producer *messaging.Producer,
+	quotaChecker *quota.TokenQuotaChecker,
 ) *ChapterHandler {
 	return &ChapterHandler{
-		chapterRepo: chapterRepo,
-		projectRepo: projectRepo,
-		jobRepo:     jobRepo,
-		producer:    producer,
+		cfg:          cfg,
+		chapterRepo:  chapterRepo,
+		projectRepo:  projectRepo,
+		jobRepo:      jobRepo,
+		producer:     producer,
+		quotaChecker: quotaChecker,
 	}
 }
 
@@ -243,7 +259,178 @@ func (h *ChapterHandler) DeleteChapter(c *gin.Context) {
 // @Failure 500 {object} dto.ErrorResponse
 // @Router /v1/projects/{pid}/chapters/generate [post]
 func (h *ChapterHandler) GenerateChapter(c *gin.Context) {
-	dto.Error(c, 501, "chapter generation not implemented")
+	ctx := c.Request.Context()
+	tenantID := middleware.GetTenantIDFromGin(c)
+	projectID := dto.BindProjectID(c)
+
+	var req dto.GenerateChapterRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		dto.BadRequest(c, "invalid request body: "+err.Error())
+		return
+	}
+
+	provider, model, err := resolveProviderModel(h.cfg, "", pickOptionModel(req.Options))
+	if err != nil {
+		dto.BadRequest(c, err.Error())
+		return
+	}
+
+	idempotencyKey := strings.TrimSpace(c.GetHeader("Idempotency-Key"))
+	if len(idempotencyKey) > 128 {
+		dto.BadRequest(c, "Idempotency-Key too long")
+		return
+	}
+	if idempotencyKey != "" {
+		existing, err := h.jobRepo.GetByIdempotencyKey(ctx, idempotencyKey)
+		if err != nil {
+			logger.Error(ctx, "failed to check idempotency key", err)
+			dto.InternalError(c, "failed to create job")
+			return
+		}
+		if existing != nil {
+			if existing.ProjectID != projectID || existing.JobType != entity.JobTypeChapterGen {
+				dto.Conflict(c, "idempotency key already used")
+				return
+			}
+			dto.Accepted(c, dto.ToJobResponse(existing))
+			return
+		}
+	}
+
+	if h.quotaChecker != nil {
+		if _, err := h.quotaChecker.CheckBalance(ctx, tenantID, 1000); err != nil {
+			var exceeded quota.TokenBalanceExceededError
+			if stderrors.As(err, &exceeded) {
+				dto.Error(c, http.StatusTooManyRequests, "token balance insufficient")
+				return
+			}
+			logger.Error(ctx, "quota check failed", err)
+			dto.InternalError(c, "quota check failed")
+			return
+		}
+	}
+
+	targetWordCount := req.TargetWordCount
+	if targetWordCount <= 0 {
+		project, err := h.projectRepo.GetByID(ctx, projectID)
+		if err != nil {
+			logger.Error(ctx, "failed to load project", err)
+			dto.InternalError(c, "failed to load project")
+			return
+		}
+		if project == nil {
+			dto.NotFound(c, "project not found")
+			return
+		}
+		if project.Settings != nil && project.Settings.DefaultChapterLength > 0 {
+			targetWordCount = project.Settings.DefaultChapterLength
+		} else {
+			targetWordCount = 2000
+		}
+	}
+
+	jobID := uuid.NewString()
+	inputParams := map[string]any{
+		"mode":              "async_generate",
+		"project_id":        projectID,
+		"volume_id":         strings.TrimSpace(req.VolumeID),
+		"title":             strings.TrimSpace(req.Title),
+		"outline":           strings.TrimSpace(req.Outline),
+		"target_word_count": targetWordCount,
+		"story_time_start":  req.StoryTimeStart,
+		"notes":             strings.TrimSpace(req.Notes),
+		"provider":          provider,
+		"model":             model,
+	}
+	if req.Options != nil {
+		if req.Options.Temperature != 0 {
+			inputParams["temperature"] = req.Options.Temperature
+		}
+		if req.Options.MaxRetries > 0 {
+			inputParams["max_retries"] = req.Options.MaxRetries
+		}
+		if req.Options.SkipValidation {
+			inputParams["skip_validation"] = true
+		}
+	}
+	inputBytes, _ := json.Marshal(inputParams)
+
+	job := entity.NewGenerationJob(tenantID, projectID, entity.JobTypeChapterGen, inputBytes)
+	job.ID = jobID
+	if idempotencyKey != "" {
+		job.IdempotencyKey = &idempotencyKey
+	}
+	if err := h.jobRepo.Create(ctx, job); err != nil {
+		if idempotencyKey != "" {
+			existing, getErr := h.jobRepo.GetByIdempotencyKey(ctx, idempotencyKey)
+			if getErr == nil && existing != nil {
+				dto.Accepted(c, dto.ToJobResponse(existing))
+				return
+			}
+		}
+		logger.Error(ctx, "failed to create generation job", err)
+		dto.InternalError(c, "failed to create job")
+		return
+	}
+
+	seqNum, err := h.chapterRepo.GetNextSeqNum(ctx, projectID, strings.TrimSpace(req.VolumeID))
+	if err != nil {
+		logger.Error(ctx, "failed to get next seq num", err)
+		dto.InternalError(c, "failed to create chapter")
+		return
+	}
+
+	chapter := entity.NewChapter(projectID, strings.TrimSpace(req.VolumeID), seqNum)
+	chapter.Title = strings.TrimSpace(req.Title)
+	chapter.Outline = strings.TrimSpace(req.Outline)
+	chapter.Notes = strings.TrimSpace(req.Notes)
+	chapter.StoryTimeStart = req.StoryTimeStart
+	chapter.Status = entity.ChapterStatusGenerating
+
+	if err := h.chapterRepo.Create(ctx, chapter); err != nil {
+		logger.Error(ctx, "failed to create chapter", err)
+		dto.InternalError(c, "failed to create chapter")
+		return
+	}
+
+	job.ChapterID = &chapter.ID
+	inputParams["chapter_id"] = chapter.ID
+	inputParams["chapter_seq_num"] = chapter.SeqNum
+	inputBytes, _ = json.Marshal(inputParams)
+	job.InputParams = inputBytes
+	if err := h.jobRepo.Update(ctx, job); err != nil {
+		logger.Error(ctx, "failed to update job with chapter id", err)
+		dto.InternalError(c, "failed to create job")
+		return
+	}
+
+	temp := pickOptionTemperature(req.Options)
+	msg := &messaging.GenerationJobMessage{
+		JobID:          jobID,
+		TenantID:       tenantID,
+		ProjectID:      projectID,
+		ChapterID:      &chapter.ID,
+		JobType:        string(entity.JobTypeChapterGen),
+		Priority:       job.Priority,
+		IdempotencyKey: job.IdempotencyKey,
+		Params: map[string]interface{}{
+			"outline":           chapter.Outline,
+			"target_word_count": targetWordCount,
+			"provider":          provider,
+			"model":             model,
+		},
+	}
+	if temp != nil {
+		msg.Params["temperature"] = float64(*temp)
+	}
+
+	if _, err := h.producer.PublishGenJob(ctx, msg); err != nil {
+		logger.Error(ctx, "failed to publish chapter generation job", err)
+		dto.InternalError(c, "failed to enqueue job")
+		return
+	}
+
+	dto.Accepted(c, dto.ToJobResponse(job))
 }
 
 // RegenerateChapter 重新生成章节
@@ -260,5 +447,190 @@ func (h *ChapterHandler) GenerateChapter(c *gin.Context) {
 // @Failure 500 {object} dto.ErrorResponse
 // @Router /v1/chapters/{cid}/regenerate [post]
 func (h *ChapterHandler) RegenerateChapter(c *gin.Context) {
-	dto.Error(c, 501, "chapter regeneration not implemented")
+	ctx := c.Request.Context()
+	tenantID := middleware.GetTenantIDFromGin(c)
+	chapterID := dto.BindChapterID(c)
+
+	var req dto.RegenerateChapterRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		dto.BadRequest(c, "invalid request body: "+err.Error())
+		return
+	}
+
+	chapter, err := h.chapterRepo.GetByID(ctx, chapterID)
+	if err != nil {
+		logger.Error(ctx, "failed to get chapter", err)
+		dto.InternalError(c, "failed to regenerate chapter")
+		return
+	}
+	if chapter == nil {
+		dto.NotFound(c, "chapter not found")
+		return
+	}
+
+	project, err := h.projectRepo.GetByID(ctx, chapter.ProjectID)
+	if err != nil {
+		logger.Error(ctx, "failed to load project", err)
+		dto.InternalError(c, "failed to regenerate chapter")
+		return
+	}
+	if project == nil {
+		dto.NotFound(c, "project not found")
+		return
+	}
+
+	if h.quotaChecker != nil {
+		if _, err := h.quotaChecker.CheckBalance(ctx, tenantID, 1000); err != nil {
+			var exceeded quota.TokenBalanceExceededError
+			if stderrors.As(err, &exceeded) {
+				dto.Error(c, http.StatusTooManyRequests, "token balance insufficient")
+				return
+			}
+			logger.Error(ctx, "quota check failed", err)
+			dto.InternalError(c, "quota check failed")
+			return
+		}
+	}
+
+	outline := strings.TrimSpace(req.Outline)
+	if outline == "" {
+		outline = strings.TrimSpace(chapter.Outline)
+	}
+	if outline == "" {
+		dto.BadRequest(c, "outline is required")
+		return
+	}
+
+	targetWordCount := req.TargetWordCount
+	if targetWordCount <= 0 {
+		if project.Settings != nil && project.Settings.DefaultChapterLength > 0 {
+			targetWordCount = project.Settings.DefaultChapterLength
+		} else {
+			targetWordCount = 2000
+		}
+	}
+
+	provider, model, err := resolveProviderModel(h.cfg, "", pickOptionModel(req.Options))
+	if err != nil {
+		dto.BadRequest(c, err.Error())
+		return
+	}
+
+	idempotencyKey := strings.TrimSpace(c.GetHeader("Idempotency-Key"))
+	if len(idempotencyKey) > 128 {
+		dto.BadRequest(c, "Idempotency-Key too long")
+		return
+	}
+	if idempotencyKey != "" {
+		existing, err := h.jobRepo.GetByIdempotencyKey(ctx, idempotencyKey)
+		if err != nil {
+			logger.Error(ctx, "failed to check idempotency key", err)
+			dto.InternalError(c, "failed to create job")
+			return
+		}
+		if existing != nil {
+			if existing.ProjectID != chapter.ProjectID || existing.JobType != entity.JobTypeChapterGen || existing.ChapterID == nil || *existing.ChapterID != chapterID {
+				dto.Conflict(c, "idempotency key already used")
+				return
+			}
+			dto.Accepted(c, dto.ToJobResponse(existing))
+			return
+		}
+	}
+
+	jobID := uuid.NewString()
+	inputParams := map[string]any{
+		"mode":              "async_regenerate",
+		"project_id":        chapter.ProjectID,
+		"chapter_id":        chapter.ID,
+		"outline":           outline,
+		"target_word_count": targetWordCount,
+		"provider":          provider,
+		"model":             model,
+	}
+	if req.Options != nil {
+		if req.Options.Temperature != 0 {
+			inputParams["temperature"] = req.Options.Temperature
+		}
+		if req.Options.MaxRetries > 0 {
+			inputParams["max_retries"] = req.Options.MaxRetries
+		}
+		if req.Options.SkipValidation {
+			inputParams["skip_validation"] = true
+		}
+	}
+	inputBytes, _ := json.Marshal(inputParams)
+
+	job := entity.NewGenerationJob(tenantID, chapter.ProjectID, entity.JobTypeChapterGen, inputBytes)
+	job.ID = jobID
+	job.ChapterID = &chapterID
+	if idempotencyKey != "" {
+		job.IdempotencyKey = &idempotencyKey
+	}
+	if err := h.jobRepo.Create(ctx, job); err != nil {
+		if idempotencyKey != "" {
+			existing, getErr := h.jobRepo.GetByIdempotencyKey(ctx, idempotencyKey)
+			if getErr == nil && existing != nil {
+				dto.Accepted(c, dto.ToJobResponse(existing))
+				return
+			}
+		}
+		logger.Error(ctx, "failed to create generation job", err)
+		dto.InternalError(c, "failed to create job")
+		return
+	}
+
+	chapter.Outline = outline
+	chapter.Status = entity.ChapterStatusGenerating
+	if err := h.chapterRepo.Update(ctx, chapter); err != nil {
+		logger.Error(ctx, "failed to update chapter status", err)
+		dto.InternalError(c, "failed to regenerate chapter")
+		return
+	}
+
+	temp := pickOptionTemperature(req.Options)
+	msg := &messaging.GenerationJobMessage{
+		JobID:          jobID,
+		TenantID:       tenantID,
+		ProjectID:      chapter.ProjectID,
+		ChapterID:      &chapter.ID,
+		JobType:        string(entity.JobTypeChapterGen),
+		Priority:       job.Priority,
+		IdempotencyKey: job.IdempotencyKey,
+		Params: map[string]interface{}{
+			"outline":           outline,
+			"target_word_count": targetWordCount,
+			"provider":          provider,
+			"model":             model,
+		},
+	}
+	if temp != nil {
+		msg.Params["temperature"] = float64(*temp)
+	}
+
+	if _, err := h.producer.PublishGenJob(ctx, msg); err != nil {
+		logger.Error(ctx, "failed to publish chapter regeneration job", err)
+		dto.InternalError(c, "failed to enqueue job")
+		return
+	}
+
+	dto.Accepted(c, dto.ToJobResponse(job))
+}
+
+func pickOptionModel(opt *dto.GenerationOptions) string {
+	if opt == nil {
+		return ""
+	}
+	return strings.TrimSpace(opt.Model)
+}
+
+func pickOptionTemperature(opt *dto.GenerationOptions) *float32 {
+	if opt == nil {
+		return nil
+	}
+	if opt.Temperature == 0 {
+		return nil
+	}
+	f := float32(opt.Temperature)
+	return &f
 }

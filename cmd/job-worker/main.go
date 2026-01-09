@@ -12,8 +12,6 @@ import (
 	"syscall"
 	"time"
 
-	commonv1 "z-novel-ai-api/api/proto/gen/go/common"
-	storyv1 "z-novel-ai-api/api/proto/gen/go/story"
 	"z-novel-ai-api/internal/application/quota"
 	"z-novel-ai-api/internal/application/story"
 	"z-novel-ai-api/internal/config"
@@ -22,12 +20,9 @@ import (
 	"z-novel-ai-api/internal/infrastructure/messaging"
 	"z-novel-ai-api/internal/infrastructure/persistence/postgres"
 	"z-novel-ai-api/internal/infrastructure/persistence/redis"
-	grpcclient "z-novel-ai-api/internal/interfaces/grpc/client"
 	einoobs "z-novel-ai-api/internal/observability/eino"
 	"z-novel-ai-api/pkg/logger"
 	"z-novel-ai-api/pkg/tracer"
-
-	"github.com/google/uuid"
 )
 
 func main() {
@@ -79,14 +74,8 @@ func main() {
 	// 4. 初始化应用逻辑
 	llmFactory := llm.NewEinoFactory(cfg)
 	foundationGenerator := story.NewFoundationGenerator(llmFactory)
+	chapterGenerator := story.NewChapterGenerator(llmFactory)
 	tokenQuotaChecker := quota.NewTokenQuotaChecker(tenantRepo)
-
-	storyConn, err := grpcclient.Dial(ctx, cfg.Clients.GRPC.StoryGenServiceAddr, cfg.Clients.GRPC.DialTimeout)
-	if err != nil {
-		logger.Fatal(ctx, "failed to dial story-gen-svc", err)
-	}
-	defer func() { _ = storyConn.Close() }()
-	storyClient := storyv1.NewStoryGenServiceClient(storyConn)
 
 	// 5. 初始化消息消费者
 	consumer := messaging.NewConsumer(redisClient.Redis(), messaging.ConsumerConfig{
@@ -129,43 +118,24 @@ func main() {
 				return nil
 			}
 
-			job.Start()
-			job.UpdateProgress(5)
-			if err := jobRepo.Update(txCtx, job); err != nil {
+			// 余额检查（不足时不重试，直接标记失败）
+			if _, err := tokenQuotaChecker.CheckBalance(txCtx, payload.TenantID, 1000); err != nil {
+				var exceeded quota.TokenBalanceExceededError
+				if errors.As(err, &exceeded) {
+					job.Fail(err.Error())
+					_ = jobRepo.Update(txCtx, job)
+					if payload.ChapterID != nil {
+						_ = markChapterDraft(txCtx, chapterRepo, *payload.ChapterID)
+					}
+					return nil
+				}
 				return err
-			}
-
-			outline, _ := payload.Params["outline"].(string)
-			targetWordCount := int32(0)
-			if v, ok := payload.Params["target_word_count"].(float64); ok {
-				targetWordCount = int32(v)
 			}
 
 			if payload.ChapterID == nil {
 				job.Fail("chapter_id is required for chapter_gen job")
 				_ = jobRepo.Update(txCtx, job)
 				return fmt.Errorf("chapter_id is required")
-			}
-
-			traceID := uuid.NewString()
-			genResp, err := storyClient.GenerateChapter(txCtx, &storyv1.GenerateChapterRequest{
-				Context: &commonv1.TenantContext{
-					TenantId: payload.TenantID,
-					TraceId:  traceID,
-				},
-				ProjectId:       payload.ProjectID,
-				ChapterId:       *payload.ChapterID,
-				Outline:         outline,
-				TargetWordCount: targetWordCount,
-			})
-			if err != nil {
-				job.Fail(err.Error())
-				_ = jobRepo.Update(txCtx, job)
-				return err
-			}
-			job.UpdateProgress(80)
-			if err := jobRepo.Update(txCtx, job); err != nil {
-				return err
 			}
 
 			chapter, err := chapterRepo.GetByID(txCtx, *payload.ChapterID)
@@ -181,17 +151,60 @@ func main() {
 				return err
 			}
 
-			chapter.SetContent(genResp.GetContent())
+			project, err := projectRepo.GetByID(txCtx, payload.ProjectID)
+			if err != nil {
+				job.Fail(err.Error())
+				_ = jobRepo.Update(txCtx, job)
+				return err
+			}
+			if project == nil {
+				err := fmt.Errorf("project not found: %s", payload.ProjectID)
+				job.Fail(err.Error())
+				_ = jobRepo.Update(txCtx, job)
+				return err
+			}
+
+			in, err := buildChapterInput(cfg, project, chapter, payload.Params)
+			if err != nil {
+				job.Fail(err.Error())
+				_ = jobRepo.Update(txCtx, job)
+				_ = markChapterDraft(txCtx, chapterRepo, chapter.ID)
+				return nil
+			}
+
+			if chapter.Status != entity.ChapterStatusGenerating {
+				chapter.Status = entity.ChapterStatusGenerating
+				_ = chapterRepo.Update(txCtx, chapter)
+			}
+
+			job.Start()
+			job.UpdateProgress(5)
+			if err := jobRepo.Update(txCtx, job); err != nil {
+				return err
+			}
+
+			out, err := chapterGenerator.Generate(txCtx, in)
+			if err != nil {
+				job.Fail(err.Error())
+				_ = jobRepo.Update(txCtx, job)
+				return err
+			}
+
+			job.UpdateProgress(80)
+			if err := jobRepo.Update(txCtx, job); err != nil {
+				return err
+			}
+
+			chapter.Outline = in.ChapterOutline
+			chapter.SetContent(out.Content)
 			chapter.Status = entity.ChapterStatusCompleted
-			if m := genResp.GetMetadata(); m != nil {
-				chapter.GenerationMetadata = &entity.GenerationMetadata{
-					Model:            m.GetModel(),
-					Provider:         m.GetProvider(),
-					PromptTokens:     int(m.GetPromptTokens()),
-					CompletionTokens: int(m.GetCompletionTokens()),
-					Temperature:      m.GetTemperature(),
-					GeneratedAt:      time.Unix(m.GetGeneratedAt(), 0).Format(time.RFC3339),
-				}
+			chapter.GenerationMetadata = &entity.GenerationMetadata{
+				Model:            out.Meta.Model,
+				Provider:         out.Meta.Provider,
+				PromptTokens:     out.Meta.PromptTokens,
+				CompletionTokens: out.Meta.CompletionTokens,
+				Temperature:      out.Meta.Temperature,
+				GeneratedAt:      out.Meta.GeneratedAt.Format(time.RFC3339),
 			}
 
 			if err := chapterRepo.Update(txCtx, chapter); err != nil {
@@ -200,10 +213,15 @@ func main() {
 				return err
 			}
 
+			if stats, err := projectRepo.GetStats(txCtx, project.ID); err == nil && stats != nil {
+				_ = projectRepo.UpdateWordCount(txCtx, project.ID, int(stats.TotalWordCount))
+			}
+
 			result, _ := json.Marshal(map[string]interface{}{
 				"chapter_id": chapter.ID,
-				"word_count": genResp.GetWordCount(),
+				"word_count": len([]rune(out.Content)),
 			})
+			job.SetLLMMetrics(out.Meta.Provider, out.Meta.Model, out.Meta.PromptTokens, out.Meta.CompletionTokens)
 			job.Complete(result)
 			return jobRepo.Update(txCtx, job)
 		})
@@ -367,4 +385,120 @@ func buildFoundationInput(project *entity.Project, params map[string]interface{}
 		Temperature:        temperature,
 		MaxTokens:          maxTokens,
 	}, nil
+}
+
+func buildChapterInput(cfg *config.Config, project *entity.Project, chapter *entity.Chapter, params map[string]interface{}) (*story.ChapterGenerateInput, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("config is nil")
+	}
+	if project == nil {
+		return nil, fmt.Errorf("project is nil")
+	}
+	if chapter == nil {
+		return nil, fmt.Errorf("chapter is nil")
+	}
+
+	outline, _ := params["outline"].(string)
+	outline = strings.TrimSpace(outline)
+	if outline == "" {
+		outline = strings.TrimSpace(chapter.Outline)
+	}
+	if outline == "" {
+		return nil, fmt.Errorf("missing outline")
+	}
+
+	targetWordCount := 0
+	if v, ok := params["target_word_count"].(float64); ok {
+		targetWordCount = int(v)
+	}
+	if targetWordCount <= 0 {
+		if project.Settings != nil && project.Settings.DefaultChapterLength > 0 {
+			targetWordCount = project.Settings.DefaultChapterLength
+		} else {
+			targetWordCount = 2000
+		}
+	}
+
+	provider, _ := params["provider"].(string)
+	modelName, _ := params["model"].(string)
+	provider, modelName, err := resolveProviderModelForWorker(cfg, provider, modelName)
+	if err != nil {
+		return nil, err
+	}
+
+	var temperature *float32
+	if v, ok := params["temperature"].(float64); ok && v != 0 {
+		t := float32(v)
+		temperature = &t
+	} else if project.Settings != nil && project.Settings.Temperature != 0 {
+		t := float32(project.Settings.Temperature)
+		temperature = &t
+	}
+
+	writingStyle := ""
+	pov := ""
+	if project.Settings != nil {
+		writingStyle = strings.TrimSpace(project.Settings.WritingStyle)
+		pov = strings.TrimSpace(project.Settings.POV)
+	}
+
+	return &story.ChapterGenerateInput{
+		ProjectTitle:       project.Title,
+		ProjectDescription: project.Description,
+		ChapterTitle:       chapter.Title,
+		ChapterOutline:     outline,
+		TargetWordCount:    targetWordCount,
+		WritingStyle:       writingStyle,
+		POV:                pov,
+		Provider:           provider,
+		Model:              modelName,
+		Temperature:        temperature,
+	}, nil
+}
+
+func resolveProviderModelForWorker(cfg *config.Config, provider, modelName string) (string, string, error) {
+	if cfg == nil {
+		return "", "", fmt.Errorf("config is nil")
+	}
+
+	p := strings.TrimSpace(provider)
+	if p == "" {
+		p = strings.TrimSpace(cfg.LLM.DefaultProvider)
+	}
+	if p == "" {
+		return "", "", fmt.Errorf("llm provider not specified")
+	}
+	if len(p) > 32 {
+		return "", "", fmt.Errorf("llm provider too long")
+	}
+
+	providerCfg, ok := cfg.LLM.Providers[p]
+	if !ok {
+		return "", "", fmt.Errorf("llm provider not found: %s", p)
+	}
+
+	m := strings.TrimSpace(modelName)
+	if m == "" {
+		m = strings.TrimSpace(providerCfg.Model)
+	}
+	if len(m) > 64 {
+		return "", "", fmt.Errorf("llm model too long")
+	}
+
+	return p, m, nil
+}
+
+func markChapterDraft(ctx context.Context, chapterRepo *postgres.ChapterRepository, chapterID string) error {
+	if strings.TrimSpace(chapterID) == "" {
+		return nil
+	}
+	chapter, err := chapterRepo.GetByID(ctx, chapterID)
+	if err != nil || chapter == nil {
+		return err
+	}
+	if chapter.Status == entity.ChapterStatusGenerating {
+		chapter.Status = entity.ChapterStatusDraft
+		return chapterRepo.Update(ctx, chapter)
+	}
+	return nil
 }

@@ -169,7 +169,6 @@ func InitializeApp(ctx context.Context, cfg *config.Config) (*router.Router, fun
 	}
 	cache := redis.NewCache(redisClient)
 	producer := ProvideMessagingProducer(redisClient, cfg)
-	chapterHandler := handler.NewChapterHandler(chapterRepository, projectRepository, jobRepository, producer)
 	entityRepository := postgres.NewEntityRepository(client)
 	relationRepository := postgres.NewRelationRepository(client)
 	entityHandler := handler.NewEntityHandler(entityRepository, relationRepository)
@@ -177,6 +176,8 @@ func InitializeApp(ctx context.Context, cfg *config.Config) (*router.Router, fun
 	tenantContext := postgres.NewTenantContext(client)
 	tokenQuotaChecker := quota.NewTokenQuotaChecker(tenantRepository)
 	einoFactory := llm.NewEinoFactory(cfg)
+	chapterGenerator := story.NewChapterGenerator(einoFactory)
+	chapterHandler := handler.NewChapterHandler(cfg, chapterRepository, projectRepository, jobRepository, producer, tokenQuotaChecker)
 	foundationGenerator := story.NewFoundationGenerator(einoFactory)
 	foundationApplier := story.NewFoundationApplier(projectRepository, entityRepository, relationRepository, volumeRepository, chapterRepository)
 	foundationHandler := handler.NewFoundationHandler(cfg, txManager, tenantContext, tenantRepository, projectRepository, jobRepository, producer, tokenQuotaChecker, foundationGenerator, foundationApplier)
@@ -200,15 +201,7 @@ func InitializeApp(ctx context.Context, cfg *config.Config) (*router.Router, fun
 	}
 	retrievalServiceClient := ProvideRetrievalGRPCClient(retrievalGRPCConn)
 	retrievalHandler := handler.NewRetrievalHandler(retrievalServiceClient)
-	storyGenGRPCConn, cleanup4, err := ProvideStoryGenGRPCConn(ctx, cfg)
-	if err != nil {
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
-	storyGenServiceClient := ProvideStoryGenGRPCClient(storyGenGRPCConn)
-	streamHandler := handler.NewStreamHandler(chapterRepository, txManager, tenantContext, storyGenServiceClient)
+	streamHandler := handler.NewStreamHandler(cfg, chapterRepository, projectRepository, jobRepository, txManager, tenantContext, tokenQuotaChecker, chapterGenerator)
 	userHandler := handler.NewUserHandler(userRepository)
 	tenantHandler := handler.NewTenantHandler(tenantRepository)
 	eventRepository := postgres.NewEventRepository(client)
@@ -241,7 +234,6 @@ func InitializeApp(ctx context.Context, cfg *config.Config) (*router.Router, fun
 	}
 	routerRouter := router.NewWithDeps(cfg, routerHandlers)
 	return routerRouter, func() {
-		cleanup4()
 		cleanup3()
 		cleanup2()
 		cleanup()

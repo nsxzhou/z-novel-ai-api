@@ -1,0 +1,15 @@
+项目标题：{project_title}
+
+项目简介：
+{project_description}
+
+写作风格（可能为空）：{writing_style}
+叙事视角（可能为空）：{pov}
+目标字数：{target_word_count}
+
+章节标题（可能为空）：{chapter_title}
+
+章节大纲：
+{chapter_outline}
+
+请直接输出章节正文。

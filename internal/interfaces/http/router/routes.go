@@ -134,7 +134,7 @@ func RegisterV1Routes(
 	chapters := v1.Group("/chapters")
 	{
 		chapters.GET("/:cid", middleware.RequirePermission(middleware.PermProjectRead), chapterHandler.GetChapter)
-		chapters.GET("/:cid/stream", middleware.RequirePermission(middleware.PermProjectRead), streamHandler.StreamChapter) // SSE
+		chapters.GET("/:cid/stream", middleware.RequirePermission(middleware.PermChapterGenerate), streamHandler.StreamChapter) // SSE
 		chapters.PUT("/:cid", middleware.RequirePermission(middleware.PermProjectWrite), chapterHandler.UpdateChapter)
 		chapters.DELETE("/:cid", middleware.RequirePermission(middleware.PermProjectWrite), chapterHandler.DeleteChapter)
 		chapters.POST("/:cid/regenerate", middleware.RequirePermission(middleware.PermChapterGenerate), chapterHandler.RegenerateChapter)

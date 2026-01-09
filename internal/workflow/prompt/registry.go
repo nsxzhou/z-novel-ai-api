@@ -17,6 +17,7 @@ type PromptID string
 
 const (
 	PromptFoundationPlanV1       PromptID = "foundation_plan_v1"
+	PromptChapterGenV1           PromptID = "chapter_gen_v1"
 	PromptArtifactV1             PromptID = "artifact_v1"
 	PromptArtifactV2             PromptID = "artifact_v2"
 	PromptArtifactPatchV1        PromptID = "artifact_patch_v1"
@@ -79,6 +80,8 @@ func resolvePromptFiles(id PromptID) (systemFile string, userFile string, err er
 	switch id {
 	case PromptFoundationPlanV1:
 		return "templates/foundation_plan_v1.system.txt", "templates/foundation_plan_v1.user.txt", nil
+	case PromptChapterGenV1:
+		return "templates/chapter_gen_v1.system.txt", "templates/chapter_gen_v1.user.txt", nil
 	case PromptArtifactV1:
 		return "templates/artifact_v1.system.txt", "templates/artifact_v1.user.txt", nil
 	case PromptArtifactV2:

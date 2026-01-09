@@ -1,6 +1,6 @@
 # z-novel-ai-api（后端）— 当前状态与目录结构
 
-更新时间：2026-01-08
+更新时间：2026-01-09
 
 本文档面向"维护/二次开发"，目标是让你在 1 分钟内明确：
 
@@ -92,13 +92,27 @@
 - 可观测性：Eino 全局 callbacks + Prometheus 指标：`internal/observability/eino/*`
 - 安全：ProjectCreation 增加服务端“确定性确认门控”，避免模型幻觉触发误创建
 
+#### 1.2.5 章节生成闭环（Async / SSE）— **新增**
+
+补齐章节正文生成能力，支持异步 Jobs 与 SSE 流式生成（均不依赖 gRPC `story-gen-svc`）：
+
+- **主要入口:**
+  - HTTP Handler: `internal/interfaces/http/handler/chapter.go`、`internal/interfaces/http/handler/stream.go`
+  - Generator: `internal/application/story/chapter_generator.go`
+  - Prompt: `internal/workflow/prompt/templates/chapter_gen_v1.*.txt`
+  - Worker: `cmd/job-worker/main.go`（Redis Streams `chapter_gen`）
+- **HTTP API:**
+  - `POST /v1/projects/:pid/chapters/generate`：创建新章节并异步生成（`Idempotency-Key`）
+  - `POST /v1/chapters/:cid/regenerate`：异步重生成指定章节（`Idempotency-Key`；失败不清空旧正文）
+  - `GET /v1/chapters/:cid/stream`：SSE 流式生成并落库
+
 ---
 
 ## 2. 当前仓库目标与运行模式
 
 ### 2.1 默认：CRUD + 对话创作（当前仓库默认）
 
-- 目标：基础 CRUD + 对话驱动创作（孵化/迭代/Foundation）可运行；章节生成/检索等核心业务仍保留占位实现。
+- 目标：基础 CRUD + 对话驱动创作（孵化/迭代/Foundation）+ 章节生成闭环（异步/SSE）可运行；检索仍为占位实现。
 - 开关：`features.core.enabled=false`
 - 关键行为：API Gateway 启动时不会强依赖核心 gRPC 服务可达。
 
@@ -157,11 +171,14 @@ z-novel-ai-api/
 - **设定迭代**：`/v1/projects/:pid/sessions/*`、`/v1/projects/:pid/artifacts/*`
 - **一揽子生成**：`/v1/projects/:pid/foundation/*`
 
-### 4.3 占位：核心业务（统一 501）
+### 4.3 已完成：章节生成闭环
 
-- 章节生成：`POST /v1/projects/:pid/chapters/generate`
-- 章节重新生成：`POST /v1/chapters/:cid/regenerate`
+- 章节生成（异步）：`POST /v1/projects/:pid/chapters/generate`
+- 章节重新生成（异步）：`POST /v1/chapters/:cid/regenerate`
 - SSE 流式生成：`GET /v1/chapters/:cid/stream`
+
+### 4.4 占位：核心业务（统一 501）
+
 - 检索：`POST /v1/retrieval/search`
 
 ---
@@ -191,6 +208,6 @@ JWT_SECRET="dev-secret" FEATURES_CORE_ENABLED=false go run ./cmd/api-gateway
 ## 7. 后续开发方向
 
 - **增量编辑**：支持 AI 仅输出变更部分。
-- **章节生成闭环**：补齐章节正文的同步/SSE/异步路径。
+- **章节生成质量优化**：提升连贯性、可控性与后处理能力。
 - **检索与记忆**：实现向量检索与上下文召回。
 - **可观测性**：落地细分指标与告警。

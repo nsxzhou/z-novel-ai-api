@@ -1,4 +1,4 @@
-﻿//go:build wireinject
+//go:build wireinject
 // +build wireinject
 
 // Package wire 提供依赖注入配置
@@ -170,6 +170,7 @@ var GRPCClientsSet = wire.NewSet(
 var RouterSet = wire.NewSet(
 	ProvideAuthConfig,
 	llm.NewEinoFactory,
+	story.NewChapterGenerator,
 	story.NewFoundationGenerator,
 	story.NewArtifactGenerator,
 	quota.NewTokenQuotaChecker,
