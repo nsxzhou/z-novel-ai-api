@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/milvus-io/milvus-sdk-go/v2/entity"
 	"go.opentelemetry.io/otel/attribute"
@@ -29,6 +30,7 @@ type SearchParams struct {
 	CurrentStoryTime int64
 	TopK             int
 	SegmentType      string
+	SegmentTypes     []string
 }
 
 // SearchResult 检索结果
@@ -42,6 +44,9 @@ type SearchResult struct {
 
 // CreateCollection 创建集合
 func (r *Repository) CreateCollection(ctx context.Context, schema *entity.Schema) error {
+	if r == nil || r.client == nil || r.client.milvus == nil {
+		return fmt.Errorf("milvus client not configured")
+	}
 	ctx, span := tracer.Start(ctx, "milvus.CreateCollection",
 		trace.WithAttributes(attribute.String("collection", schema.CollectionName)))
 	defer span.End()
@@ -60,6 +65,9 @@ func (r *Repository) CreateCollection(ctx context.Context, schema *entity.Schema
 
 // CreateIndex 创建 HNSW 索引
 func (r *Repository) CreateIndex(ctx context.Context, collection string) error {
+	if r == nil || r.client == nil || r.client.milvus == nil {
+		return fmt.Errorf("milvus client not configured")
+	}
 	ctx, span := tracer.Start(ctx, "milvus.CreateIndex",
 		trace.WithAttributes(attribute.String("collection", collection)))
 	defer span.End()
@@ -87,6 +95,9 @@ func (r *Repository) CreateIndex(ctx context.Context, collection string) error {
 
 // CreatePartition 创建分区
 func (r *Repository) CreatePartition(ctx context.Context, collection, tenantID, projectID string) error {
+	if r == nil || r.client == nil || r.client.milvus == nil {
+		return fmt.Errorf("milvus client not configured")
+	}
 	ctx, span := tracer.Start(ctx, "milvus.CreatePartition",
 		trace.WithAttributes(
 			attribute.String("collection", collection),
@@ -102,6 +113,9 @@ func (r *Repository) CreatePartition(ctx context.Context, collection, tenantID, 
 
 // SearchSegments 检索故事片段
 func (r *Repository) SearchSegments(ctx context.Context, params *SearchParams) ([]*SearchResult, error) {
+	if r == nil || r.client == nil || r.client.milvus == nil {
+		return nil, fmt.Errorf("milvus client not configured")
+	}
 	ctx, span := tracer.Start(ctx, "milvus.SearchSegments",
 		trace.WithAttributes(
 			attribute.String("tenant_id", params.TenantID),
@@ -112,6 +126,14 @@ func (r *Repository) SearchSegments(ctx context.Context, params *SearchParams) (
 
 	collName := r.client.CollectionName(CollectionStorySegments)
 	partitionName := PartitionName(params.TenantID, params.ProjectID)
+
+	// 如果分区尚未创建（例如新项目），直接返回空结果，避免 Milvus 报 partition not found。
+	if has, err := r.client.milvus.HasPartition(ctx, collName, partitionName); err != nil {
+		span.RecordError(err)
+		return nil, fmt.Errorf("failed to check partition: %w", err)
+	} else if !has {
+		return []*SearchResult{}, nil
+	}
 
 	// 构建过滤表达式
 	filter := fmt.Sprintf(
@@ -127,6 +149,19 @@ func (r *Repository) SearchSegments(ctx context.Context, params *SearchParams) (
 	// 类型过滤
 	if params.SegmentType != "" {
 		filter += fmt.Sprintf(` && segment_type == "%s"`, params.SegmentType)
+	} else if len(params.SegmentTypes) > 0 {
+		// segment_type 只存在一个字段，使用 OR 条件构建过滤（避免依赖 IN 语法差异）。
+		var parts []string
+		for _, st := range params.SegmentTypes {
+			st = strings.TrimSpace(st)
+			if st == "" {
+				continue
+			}
+			parts = append(parts, fmt.Sprintf(`segment_type == "%s"`, st))
+		}
+		if len(parts) > 0 {
+			filter += " && (" + strings.Join(parts, " || ") + ")"
+		}
 	}
 
 	// 搜索参数
@@ -197,6 +232,9 @@ type HybridSearchParams struct {
 
 // HybridSearch 混合检索（语义 + 关键词）
 func (r *Repository) HybridSearch(ctx context.Context, params *HybridSearchParams) ([]*SearchResult, error) {
+	if r == nil || r.client == nil || r.client.milvus == nil {
+		return nil, fmt.Errorf("milvus client not configured")
+	}
 	ctx, span := tracer.Start(ctx, "milvus.HybridSearch",
 		trace.WithAttributes(
 			attribute.String("tenant_id", params.TenantID),
@@ -276,6 +314,9 @@ func (r *Repository) fusionRank(vecResults, kwResults []*SearchResult, vecWeight
 
 // InsertSegments 插入故事片段
 func (r *Repository) InsertSegments(ctx context.Context, tenantID, projectID string, segments []*StorySegment) error {
+	if r == nil || r.client == nil || r.client.milvus == nil {
+		return fmt.Errorf("milvus client not configured")
+	}
 	ctx, span := tracer.Start(ctx, "milvus.InsertSegments",
 		trace.WithAttributes(
 			attribute.String("tenant_id", tenantID),
@@ -343,6 +384,9 @@ func (r *Repository) InsertSegments(ctx context.Context, tenantID, projectID str
 
 // DeleteSegmentsByChapter 删除章节的所有片段
 func (r *Repository) DeleteSegmentsByChapter(ctx context.Context, tenantID, projectID, chapterID string) error {
+	if r == nil || r.client == nil || r.client.milvus == nil {
+		return fmt.Errorf("milvus client not configured")
+	}
 	ctx, span := tracer.Start(ctx, "milvus.DeleteSegmentsByChapter",
 		trace.WithAttributes(
 			attribute.String("chapter_id", chapterID),
@@ -351,6 +395,13 @@ func (r *Repository) DeleteSegmentsByChapter(ctx context.Context, tenantID, proj
 
 	collName := r.client.CollectionName(CollectionStorySegments)
 	partitionName := PartitionName(tenantID, projectID)
+
+	if has, err := r.client.milvus.HasPartition(ctx, collName, partitionName); err != nil {
+		span.RecordError(err)
+		return fmt.Errorf("failed to check partition: %w", err)
+	} else if !has {
+		return nil
+	}
 
 	filter := fmt.Sprintf(`chapter_id == "%s"`, chapterID)
 
@@ -363,8 +414,47 @@ func (r *Repository) DeleteSegmentsByChapter(ctx context.Context, tenantID, proj
 	return nil
 }
 
+// DeleteSegmentsByChapterAndType 删除指定 chapter_id + segment_type 的片段（同一 project 分区内）。
+func (r *Repository) DeleteSegmentsByChapterAndType(ctx context.Context, tenantID, projectID, chapterID, segmentType string) error {
+	if r == nil || r.client == nil || r.client.milvus == nil {
+		return fmt.Errorf("milvus client not configured")
+	}
+	chapterID = strings.TrimSpace(chapterID)
+	segmentType = strings.TrimSpace(segmentType)
+	if chapterID == "" || segmentType == "" {
+		return nil
+	}
+
+	ctx, span := tracer.Start(ctx, "milvus.DeleteSegmentsByChapterAndType",
+		trace.WithAttributes(
+			attribute.String("chapter_id", chapterID),
+			attribute.String("segment_type", segmentType),
+		))
+	defer span.End()
+
+	collName := r.client.CollectionName(CollectionStorySegments)
+	partitionName := PartitionName(tenantID, projectID)
+
+	if has, err := r.client.milvus.HasPartition(ctx, collName, partitionName); err != nil {
+		span.RecordError(err)
+		return fmt.Errorf("failed to check partition: %w", err)
+	} else if !has {
+		return nil
+	}
+
+	filter := fmt.Sprintf(`chapter_id == "%s" && segment_type == "%s"`, chapterID, segmentType)
+	if err := r.client.milvus.Delete(ctx, collName, partitionName, filter); err != nil {
+		span.RecordError(err)
+		return fmt.Errorf("failed to delete segments: %w", err)
+	}
+	return nil
+}
+
 // RebuildIndex 重建索引
 func (r *Repository) RebuildIndex(ctx context.Context, collection string) error {
+	if r == nil || r.client == nil || r.client.milvus == nil {
+		return fmt.Errorf("milvus client not configured")
+	}
 	ctx, span := tracer.Start(ctx, "milvus.RebuildIndex",
 		trace.WithAttributes(attribute.String("collection", collection)))
 	defer span.End()
@@ -389,4 +479,27 @@ func (r *Repository) RebuildIndex(ctx context.Context, collection string) error 
 
 	// 4. 重新加载集合
 	return r.client.milvus.LoadCollection(ctx, collName, false)
+}
+
+// EnsureStorySegmentsCollection 确保 story_segments 集合与索引可用（不存在则创建）。
+// 约束：不会做 drop/rebuild 等破坏性操作。
+func (r *Repository) EnsureStorySegmentsCollection(ctx context.Context) error {
+	if r == nil || r.client == nil || r.client.milvus == nil {
+		return fmt.Errorf("milvus client not configured")
+	}
+
+	exists, err := r.client.HasCollection(ctx, CollectionStorySegments)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		if err := r.CreateCollection(ctx, StorySegmentsSchema()); err != nil {
+			return err
+		}
+		// 新建集合时创建索引；若失败，允许后续由运维介入。
+		_ = r.CreateIndex(ctx, CollectionStorySegments)
+	}
+
+	// 尝试确保集合已加载（若已加载，Milvus 会返回成功）
+	return r.client.LoadCollection(ctx, CollectionStorySegments)
 }

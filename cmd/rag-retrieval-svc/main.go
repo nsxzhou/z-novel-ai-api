@@ -40,7 +40,7 @@ func main() {
 		_ = shutdown(ctx)
 	}()
 
-	milvusClient, err := milvus.NewClient(ctx, &cfg.Database.Milvus)
+	milvusClient, err := milvus.NewClient(ctx, &cfg.Vector.Milvus)
 	if err != nil {
 		logger.Fatal(ctx, "failed to init milvus", err)
 	}

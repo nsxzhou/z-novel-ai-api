@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"z-novel-ai-api/internal/application/quota"
+	appretrieval "z-novel-ai-api/internal/application/retrieval"
 	"z-novel-ai-api/internal/application/story"
 	"z-novel-ai-api/internal/config"
 	"z-novel-ai-api/internal/domain/entity"
@@ -38,6 +39,8 @@ type StreamHandler struct {
 
 	quotaChecker *quota.TokenQuotaChecker
 	generator    *story.ChapterGenerator
+	indexer      *appretrieval.Indexer
+	retrieval    *appretrieval.Engine
 }
 
 // NewStreamHandler 创建流式响应处理器
@@ -50,6 +53,8 @@ func NewStreamHandler(
 	tenantCtx repository.TenantContextManager,
 	quotaChecker *quota.TokenQuotaChecker,
 	generator *story.ChapterGenerator,
+	indexer *appretrieval.Indexer,
+	retrievalEngine *appretrieval.Engine,
 ) *StreamHandler {
 	return &StreamHandler{
 		cfg:          cfg,
@@ -60,6 +65,8 @@ func NewStreamHandler(
 		tenantCtx:    tenantCtx,
 		quotaChecker: quotaChecker,
 		generator:    generator,
+		indexer:      indexer,
+		retrieval:    retrievalEngine,
 	}
 }
 
@@ -218,11 +225,29 @@ func (h *StreamHandler) StreamChapter(c *gin.Context) {
 		defer close(errCh)
 
 		start := time.Now()
+		retrievedContext := ""
+		if h.retrieval != nil {
+			retrievalCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			ro, rerr := h.retrieval.Search(retrievalCtx, appretrieval.SearchInput{
+				TenantID:         tenantID,
+				ProjectID:        chapter.ProjectID,
+				Query:            outline,
+				CurrentStoryTime: chapter.StoryTimeStart,
+				TopK:             12,
+				IncludeEntities:  false,
+			})
+			cancel()
+			if rerr == nil && ro != nil && len(ro.Segments) > 0 {
+				retrievedContext = appretrieval.BuildPromptContext(ro.Segments, 10, 360)
+			}
+		}
+
 		reader, streamErr := h.generator.Stream(ctx, &story.ChapterGenerateInput{
 			ProjectTitle:       project.Title,
 			ProjectDescription: project.Description,
 			ChapterTitle:       chapter.Title,
 			ChapterOutline:     outline,
+			RetrievedContext:   retrievedContext,
 			TargetWordCount:    targetWordCount,
 			WritingStyle:       writingStyle,
 			POV:                pov,
@@ -290,6 +315,26 @@ func (h *StreamHandler) StreamChapter(c *gin.Context) {
 		if err := h.markJobCompleted(ctx, tenantID, jobID, chapter.ID, out, int(time.Since(start).Milliseconds())); err != nil {
 			errCh <- err
 			return
+		}
+
+		// 同步写索引：章节落库完成后写入向量索引（失败不影响主流程）
+		if h.indexer != nil {
+			indexCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			chForIndex := &entity.Chapter{
+				ID:             chapter.ID,
+				ProjectID:      chapter.ProjectID,
+				Title:          chapter.Title,
+				ContentText:    out.Content,
+				StoryTimeStart: chapter.StoryTimeStart,
+				StoryTimeEnd:   chapter.StoryTimeEnd,
+			}
+			if err := h.indexer.IndexChapter(indexCtx, tenantID, chapter.ProjectID, chForIndex); err != nil && !stderrors.Is(err, appretrieval.ErrVectorDisabled) {
+				logger.Warn(ctx, "failed to index chapter after stream",
+					"error", err.Error(),
+					"chapter_id", chapter.ID,
+				)
+			}
 		}
 
 		doneCh <- out

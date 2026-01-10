@@ -45,6 +45,12 @@ type ContextSegment struct {
 	StoryTime int64   `json:"story_time,omitempty"`
 	Score     float64 `json:"score"`
 	Source    string  `json:"source"` // vector, keyword, time
+
+	DocType      string `json:"doc_type,omitempty"` // chapter | artifact
+	Title        string `json:"title,omitempty"`    // chapter title（或其他可读标题）
+	ArtifactID   string `json:"artifact_id,omitempty"`
+	ArtifactType string `json:"artifact_type,omitempty"`
+	RefPath      string `json:"ref_path,omitempty"` // JSON Pointer（RFC6901）或近似路径
 }
 
 // EntityRef 实体引用
@@ -59,6 +65,8 @@ type RetrievalMeta struct {
 	TotalSegments       int   `json:"total_segments"`
 	TotalEntities       int   `json:"total_entities"`
 	RetrievalDurationMs int64 `json:"retrieval_duration_ms"`
+
+	DisabledReason string `json:"disabled_reason,omitempty"`
 }
 
 // DebugRetrievalResponse 调试检索响应

@@ -14,6 +14,7 @@ import (
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
 
+	appretrieval "z-novel-ai-api/internal/application/retrieval"
 	"z-novel-ai-api/internal/domain/entity"
 	"z-novel-ai-api/internal/infrastructure/llm"
 	einoobs "z-novel-ai-api/internal/observability/eino"
@@ -32,6 +33,9 @@ const (
 )
 
 type ArtifactGenerateInput struct {
+	TenantID  string
+	ProjectID string
+
 	ProjectTitle       string
 	ProjectDescription string
 
@@ -65,7 +69,8 @@ type ArtifactGenerateOutput struct {
 }
 
 type ArtifactGenerator struct {
-	factory *llm.EinoFactory
+	factory         *llm.EinoFactory
+	retrievalEngine *appretrieval.Engine
 
 	graphOnce sync.Once
 	graph     compose.Runnable[*ArtifactGenerateInput, *ArtifactGenerateOutput]
@@ -76,8 +81,8 @@ type ArtifactGenerator struct {
 	toolsNodeErr  error
 }
 
-func NewArtifactGenerator(factory *llm.EinoFactory) *ArtifactGenerator {
-	return &ArtifactGenerator{factory: factory}
+func NewArtifactGenerator(factory *llm.EinoFactory, retrievalEngine *appretrieval.Engine) *ArtifactGenerator {
+	return &ArtifactGenerator{factory: factory, retrievalEngine: retrievalEngine}
 }
 
 func (g *ArtifactGenerator) Generate(ctx context.Context, in *ArtifactGenerateInput) (*ArtifactGenerateOutput, error) {
@@ -275,9 +280,9 @@ func (g *ArtifactGenerator) buildGraph(ctx context.Context) (compose.Runnable[*A
 
 		// 定义该任务可用的工具列表
 		tools := []einotool.BaseTool{
-			newArtifactGetActiveTool(in), // 获取当前正在编辑的 Artifact 内容
-			newArtifactSearchTool(in),    // 语义搜索（RAG）
-			newProjectGetBriefTool(in),   // 获取项目摘要信息
+			newArtifactGetActiveTool(in),                 // 获取当前正在编辑的 Artifact 内容
+			newArtifactSearchTool(g.retrievalEngine, in), // 语义搜索（RAG）
+			newProjectGetBriefTool(in),                   // 获取项目摘要信息
 		}
 
 		// 提取工具元数据 (Schema)

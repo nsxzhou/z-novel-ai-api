@@ -21,6 +21,8 @@ type ChapterGenerateInput struct {
 	ChapterTitle   string
 	ChapterOutline string
 
+	RetrievedContext string
+
 	TargetWordCount int
 	WritingStyle    string
 	POV             string
@@ -152,6 +154,7 @@ func formatChapterMessages(ctx context.Context, in *ChapterGenerateInput) ([]*sc
 		"target_word_count":   in.TargetWordCount,
 		"chapter_title":       strings.TrimSpace(in.ChapterTitle),
 		"chapter_outline":     strings.TrimSpace(in.ChapterOutline),
+		"retrieved_context":   strings.TrimSpace(in.RetrievedContext),
 	}
 	return tpl.Format(ctx, vars)
 }

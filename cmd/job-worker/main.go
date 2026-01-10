@@ -12,12 +12,17 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/joho/godotenv"
+
 	"z-novel-ai-api/internal/application/quota"
+	appretrieval "z-novel-ai-api/internal/application/retrieval"
 	"z-novel-ai-api/internal/application/story"
 	"z-novel-ai-api/internal/config"
 	"z-novel-ai-api/internal/domain/entity"
+	infraembedding "z-novel-ai-api/internal/infrastructure/embedding"
 	"z-novel-ai-api/internal/infrastructure/llm"
 	"z-novel-ai-api/internal/infrastructure/messaging"
+	"z-novel-ai-api/internal/infrastructure/persistence/milvus"
 	"z-novel-ai-api/internal/infrastructure/persistence/postgres"
 	"z-novel-ai-api/internal/infrastructure/persistence/redis"
 	einoobs "z-novel-ai-api/internal/observability/eino"
@@ -26,6 +31,9 @@ import (
 )
 
 func main() {
+	// 加载 .env 文件（如果存在）
+	_ = godotenv.Load()
+
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Printf("Failed to load config: %v\n", err)
@@ -58,6 +66,27 @@ func main() {
 		logger.Fatal(ctx, "failed to init redis", err)
 	}
 	defer func() { _ = redisClient.Close() }()
+
+	// 额外依赖：Milvus + Embedding（用于同步写索引；不可用时自动降级）
+	var vectorRepo *milvus.Repository
+	var indexer *appretrieval.Indexer
+	var retrievalEngine *appretrieval.Engine
+	var milvusClient *milvus.Client
+	if client, err := milvus.NewClient(ctx, &cfg.Vector.Milvus); err != nil {
+		logger.Warn(ctx, "milvus not available, vector indexing disabled", "error", err.Error())
+	} else {
+		milvusClient = client
+		defer func() { _ = milvusClient.Close() }()
+		vectorRepo = milvus.NewRepository(milvusClient)
+	}
+
+	embedder, err := infraembedding.NewEinoEmbedder(ctx, &cfg.Embedding)
+	if err != nil {
+		logger.Warn(ctx, "embedding not available, vector indexing disabled", "error", err.Error())
+	} else if vectorRepo != nil {
+		indexer = appretrieval.NewIndexer(embedder, vectorRepo, cfg.Embedding.BatchSize)
+		retrievalEngine = appretrieval.NewEngine(embedder, vectorRepo, nil, cfg.Embedding.BatchSize)
+	}
 
 	// 2. 初始化 Repositories
 	txMgr := postgres.NewTxManager(pgClient)
@@ -99,7 +128,8 @@ func main() {
 			return err
 		}
 
-		return txMgr.WithTransaction(ctx, func(txCtx context.Context) error {
+		var chapterForIndex *entity.Chapter
+		txErr := txMgr.WithTransaction(ctx, func(txCtx context.Context) error {
 			if err := tenantCtx.SetTenant(txCtx, payload.TenantID); err != nil {
 				return err
 			}
@@ -172,6 +202,21 @@ func main() {
 				return nil
 			}
 
+			// RAG：在生成前召回上下文，注入 Prompt（失败不影响主流程）
+			if retrievalEngine != nil {
+				ro, rerr := retrievalEngine.Search(txCtx, appretrieval.SearchInput{
+					TenantID:         payload.TenantID,
+					ProjectID:        payload.ProjectID,
+					Query:            in.ChapterOutline,
+					CurrentStoryTime: chapter.StoryTimeStart,
+					TopK:             12,
+					IncludeEntities:  false,
+				})
+				if rerr == nil && ro != nil && len(ro.Segments) > 0 {
+					in.RetrievedContext = appretrieval.BuildPromptContext(ro.Segments, 10, 360)
+				}
+			}
+
 			if chapter.Status != entity.ChapterStatusGenerating {
 				chapter.Status = entity.ChapterStatusGenerating
 				_ = chapterRepo.Update(txCtx, chapter)
@@ -223,8 +268,38 @@ func main() {
 			})
 			job.SetLLMMetrics(out.Meta.Provider, out.Meta.Model, out.Meta.PromptTokens, out.Meta.CompletionTokens)
 			job.Complete(result)
-			return jobRepo.Update(txCtx, job)
+			if err := jobRepo.Update(txCtx, job); err != nil {
+				return err
+			}
+
+			// 事务内仅准备索引输入；索引写入放到事务提交之后执行，避免持有 DB 连接。
+			chapterForIndex = &entity.Chapter{
+				ID:             chapter.ID,
+				ProjectID:      chapter.ProjectID,
+				Title:          chapter.Title,
+				ContentText:    chapter.ContentText,
+				StoryTimeStart: chapter.StoryTimeStart,
+				StoryTimeEnd:   chapter.StoryTimeEnd,
+			}
+			return nil
 		})
+
+		if txErr != nil {
+			return txErr
+		}
+
+		// 同步写索引：章节生成成功后写入向量索引（失败不影响消费 ACK）
+		if indexer != nil && chapterForIndex != nil {
+			indexCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			if err := indexer.IndexChapter(indexCtx, payload.TenantID, payload.ProjectID, chapterForIndex); err != nil && !errors.Is(err, appretrieval.ErrVectorDisabled) {
+				logger.Warn(ctx, "failed to index chapter after job completion",
+					"error", err.Error(),
+					"chapter_id", chapterForIndex.ID,
+				)
+			}
+		}
+		return nil
 	})
 
 	// 注册 foundation_gen 处理器

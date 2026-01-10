@@ -12,4 +12,7 @@
 章节大纲：
 {chapter_outline}
 
+召回上下文（可能为空）：
+{retrieved_context}
+
 请直接输出章节正文。

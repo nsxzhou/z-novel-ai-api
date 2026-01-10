@@ -2,12 +2,15 @@
 package handler
 
 import (
+	"errors"
 	"strings"
 	"time"
 
+	appretrieval "z-novel-ai-api/internal/application/retrieval"
 	"z-novel-ai-api/internal/application/story"
 	"z-novel-ai-api/internal/domain/repository"
 	"z-novel-ai-api/internal/interfaces/http/dto"
+	"z-novel-ai-api/internal/interfaces/http/middleware"
 	"z-novel-ai-api/pkg/logger"
 
 	"github.com/gin-gonic/gin"
@@ -15,10 +18,11 @@ import (
 
 type ArtifactHandler struct {
 	artifactRepo repository.ArtifactRepository
+	indexer      *appretrieval.Indexer
 }
 
-func NewArtifactHandler(artifactRepo repository.ArtifactRepository) *ArtifactHandler {
-	return &ArtifactHandler{artifactRepo: artifactRepo}
+func NewArtifactHandler(artifactRepo repository.ArtifactRepository, indexer *appretrieval.Indexer) *ArtifactHandler {
+	return &ArtifactHandler{artifactRepo: artifactRepo, indexer: indexer}
 }
 
 // ListArtifacts 列出项目下构件
@@ -245,6 +249,7 @@ func (h *ArtifactHandler) CompareVersions(c *gin.Context) {
 // @Router /v1/projects/{pid}/artifacts/{aid}/rollback [post]
 func (h *ArtifactHandler) Rollback(c *gin.Context) {
 	ctx := c.Request.Context()
+	tenantID := middleware.GetTenantIDFromGin(c)
 	projectID := dto.BindProjectID(c)
 	artifactID := dto.BindArtifactID(c)
 
@@ -280,6 +285,17 @@ func (h *ArtifactHandler) Rollback(c *gin.Context) {
 		logger.Error(ctx, "failed to set active version", err)
 		dto.InternalError(c, "failed to rollback")
 		return
+	}
+
+	// 同步写索引：回滚只切 active_version_id，因此直接用目标版本内容重建索引。
+	if h.indexer != nil {
+		if err := h.indexer.IndexArtifactJSON(ctx, tenantID, projectID, art.Type, art.ID, version.Content); err != nil && !errors.Is(err, appretrieval.ErrVectorDisabled) {
+			logger.Warn(ctx, "failed to index artifact after rollback",
+				"error", err.Error(),
+				"artifact_id", art.ID,
+				"artifact_type", string(art.Type),
+			)
+		}
 	}
 
 	dto.Success(c, &dto.ArtifactRollbackResponse{

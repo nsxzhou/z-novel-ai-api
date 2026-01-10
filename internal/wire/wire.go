@@ -7,12 +7,15 @@ package wire
 import (
 	"context"
 
+	einoembedding "github.com/cloudwego/eino/components/embedding"
 	"github.com/google/wire"
 
 	"z-novel-ai-api/internal/application/quota"
+	"z-novel-ai-api/internal/application/retrieval"
 	"z-novel-ai-api/internal/application/story"
 	"z-novel-ai-api/internal/config"
 	"z-novel-ai-api/internal/domain/repository"
+	infraembedding "z-novel-ai-api/internal/infrastructure/embedding"
 	"z-novel-ai-api/internal/infrastructure/llm"
 	"z-novel-ai-api/internal/infrastructure/messaging"
 	"z-novel-ai-api/internal/infrastructure/persistence/milvus"
@@ -21,6 +24,7 @@ import (
 	"z-novel-ai-api/internal/interfaces/http/handler"
 	"z-novel-ai-api/internal/interfaces/http/middleware"
 	"z-novel-ai-api/internal/interfaces/http/router"
+	"z-novel-ai-api/pkg/logger"
 )
 
 // DataLayer 数据层依赖容器
@@ -107,7 +111,9 @@ func InitializeApp(ctx context.Context, cfg *config.Config) (*router.Router, fun
 		RepoSet,
 		RedisSet,
 		MessagingSet,
-		GRPCClientsSet,
+		EmbeddingSet,
+		MilvusAppSet,
+		RetrievalSet,
 		RouterSet,
 	)
 	return nil, nil, nil
@@ -152,6 +158,23 @@ var MessagingSet = wire.NewSet(
 var MilvusSet = wire.NewSet(
 	ProvideMilvusClient,
 	milvus.NewRepository,
+)
+
+// MilvusAppSet API 网关可选 Milvus（不可达时不阻塞启动）
+var MilvusAppSet = wire.NewSet(
+	ProvideMilvusClientOptional,
+	ProvideMilvusRepositoryOptional,
+)
+
+// EmbeddingSet 可选 Embedder（不可用时禁用向量检索/索引）
+var EmbeddingSet = wire.NewSet(
+	ProvideEmbedderOptional,
+)
+
+// RetrievalSet 本地检索引擎（HTTP + 生成侧共用）
+var RetrievalSet = wire.NewSet(
+	ProvideRetrievalEngine,
+	ProvideRetrievalIndexer,
 )
 
 // GRPCClientsSet gRPC 客户端提供者集合
@@ -255,7 +278,7 @@ func ProvideMessagingProducer(redisClient *redis.Client, cfg *config.Config) *me
 
 // ProvideMilvusClient 提供 Milvus 客户端
 func ProvideMilvusClient(ctx context.Context, cfg *config.Config) (*milvus.Client, func(), error) {
-	client, err := milvus.NewClient(ctx, &cfg.Database.Milvus)
+	client, err := milvus.NewClient(ctx, &cfg.Vector.Milvus)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -263,6 +286,50 @@ func ProvideMilvusClient(ctx context.Context, cfg *config.Config) (*milvus.Clien
 		client.Close()
 	}
 	return client, cleanup, nil
+}
+
+func ProvideMilvusClientOptional(ctx context.Context, cfg *config.Config) (*milvus.Client, func(), error) {
+	client, err := milvus.NewClient(ctx, &cfg.Vector.Milvus)
+	if err != nil {
+		logger.Warn(ctx, "milvus not available, vector features disabled", "error", err.Error())
+		return nil, func() {}, nil
+	}
+	cleanup := func() {
+		_ = client.Close()
+	}
+	return client, cleanup, nil
+}
+
+func ProvideMilvusRepositoryOptional(client *milvus.Client) *milvus.Repository {
+	if client == nil {
+		return nil
+	}
+	return milvus.NewRepository(client)
+}
+
+func ProvideEmbedderOptional(ctx context.Context, cfg *config.Config) (einoembedding.Embedder, error) {
+	embedder, err := infraembedding.NewEinoEmbedder(ctx, &cfg.Embedding)
+	if err != nil {
+		logger.Warn(ctx, "embedding not available, vector features disabled", "error", err.Error())
+		return nil, nil
+	}
+	return embedder, nil
+}
+
+func ProvideRetrievalEngine(cfg *config.Config, embedder einoembedding.Embedder, vectorRepo *milvus.Repository, entityRepo repository.EntityRepository) *retrieval.Engine {
+	bs := 0
+	if cfg != nil {
+		bs = cfg.Embedding.BatchSize
+	}
+	return retrieval.NewEngine(embedder, vectorRepo, entityRepo, bs)
+}
+
+func ProvideRetrievalIndexer(cfg *config.Config, embedder einoembedding.Embedder, vectorRepo *milvus.Repository) *retrieval.Indexer {
+	bs := 0
+	if cfg != nil {
+		bs = cfg.Embedding.BatchSize
+	}
+	return retrieval.NewIndexer(embedder, vectorRepo, bs)
 }
 
 // ProvideAuthConfig 提供认证配置

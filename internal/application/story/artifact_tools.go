@@ -9,6 +9,7 @@ import (
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 
+	appretrieval "z-novel-ai-api/internal/application/retrieval"
 	"z-novel-ai-api/internal/domain/entity"
 )
 
@@ -88,11 +89,12 @@ func (t *artifactGetActiveTool) InvokableRun(_ context.Context, argumentsInJSON 
 }
 
 type artifactSearchTool struct {
-	in *ArtifactGenerateInput
+	engine *appretrieval.Engine
+	in     *ArtifactGenerateInput
 }
 
-func newArtifactSearchTool(in *ArtifactGenerateInput) *artifactSearchTool {
-	return &artifactSearchTool{in: in}
+func newArtifactSearchTool(engine *appretrieval.Engine, in *ArtifactGenerateInput) *artifactSearchTool {
+	return &artifactSearchTool{engine: engine, in: in}
 }
 
 func (t *artifactSearchTool) GetType() string { return toolNameArtifactSearch }
@@ -100,7 +102,7 @@ func (t *artifactSearchTool) GetType() string { return toolNameArtifactSearch }
 func (t *artifactSearchTool) Info(_ context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: toolNameArtifactSearch,
-		Desc: "在当前设定 JSON 中做关键词检索，返回若干命中片段，便于定位 key/name/章节等信息。",
+		Desc: "对项目的设定索引做语义检索（优先向量召回，降级为字符串匹配），返回命中片段用于定位 key/name/设定条目。",
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"query": {Type: schema.String, Desc: "检索关键词", Required: true},
 			"type":  {Type: schema.String, Desc: "可选：限定构件类型（novel_foundation/worldview/characters/outline）"},
@@ -109,18 +111,20 @@ func (t *artifactSearchTool) Info(_ context.Context) (*schema.ToolInfo, error) {
 	}, nil
 }
 
-func (t *artifactSearchTool) InvokableRun(_ context.Context, argumentsInJSON string, _ ...tool.Option) (string, error) {
+func (t *artifactSearchTool) InvokableRun(ctx context.Context, argumentsInJSON string, _ ...tool.Option) (string, error) {
 	var args struct {
 		Query string `json:"query"`
 		Type  string `json:"type,omitempty"`
 		TopK  int    `json:"top_k,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(argumentsInJSON), &args); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+		b, _ := json.Marshal(map[string]any{"error": fmt.Sprintf("invalid arguments: %v", err)})
+		return string(b), nil
 	}
 	q := strings.TrimSpace(args.Query)
 	if q == "" {
-		return "", fmt.Errorf("query is required")
+		b, _ := json.Marshal(map[string]any{"error": "query is required"})
+		return string(b), nil
 	}
 	topK := args.TopK
 	if topK <= 0 {
@@ -131,11 +135,72 @@ func (t *artifactSearchTool) InvokableRun(_ context.Context, argumentsInJSON str
 	}
 
 	type hit struct {
-		Type    string `json:"type"`
-		Snippet string `json:"snippet"`
+		ArtifactType string  `json:"artifact_type,omitempty"`
+		RefPath      string  `json:"ref_path,omitempty"`
+		Snippet      string  `json:"snippet"`
+		Score        float64 `json:"score,omitempty"`
+		Source       string  `json:"source,omitempty"`
 	}
 	var hits []hit
 
+	// 1) 向量召回（可降级）
+	disabledReason := ""
+	segmentTypes := appretrieval.AllArtifactSegmentTypes()
+	filterType := entity.ArtifactType(strings.TrimSpace(args.Type))
+	if filterType != "" {
+		segType := appretrieval.ArtifactSegmentType(filterType)
+		if segType == "" {
+			b, _ := json.Marshal(map[string]any{"error": fmt.Sprintf("invalid type: %s", strings.TrimSpace(args.Type))})
+			return string(b), nil
+		}
+		segmentTypes = []string{segType}
+	}
+
+	if t != nil && t.engine != nil && t.in != nil {
+		out, err := t.engine.Search(ctx, appretrieval.SearchInput{
+			TenantID:        strings.TrimSpace(t.in.TenantID),
+			ProjectID:       strings.TrimSpace(t.in.ProjectID),
+			Query:           q,
+			TopK:            topK,
+			SegmentTypes:    segmentTypes,
+			IncludeEntities: false,
+		})
+		if err != nil {
+			disabledReason = err.Error()
+		} else if out != nil {
+			disabledReason = strings.TrimSpace(out.DisabledReason)
+			for _, seg := range out.Segments {
+				if len(hits) >= topK {
+					break
+				}
+				if strings.TrimSpace(seg.Text) == "" {
+					continue
+				}
+				artifactType := strings.TrimSpace(seg.ArtifactType)
+				if filterType != "" && artifactType == "" {
+					artifactType = string(filterType)
+				}
+				idx := strings.Index(seg.Text, q)
+				snippet := ""
+				if idx >= 0 {
+					snippet = sliceAround(seg.Text, idx, len(q), 220)
+				} else {
+					snippet = sliceAround(seg.Text, 0, 0, 220)
+				}
+				hits = append(hits, hit{
+					ArtifactType: artifactType,
+					RefPath:      strings.TrimSpace(seg.RefPath),
+					Snippet:      snippet,
+					Score:        seg.Score,
+					Source:       seg.Source,
+				})
+			}
+		}
+	} else {
+		disabledReason = "retrieval engine not configured"
+	}
+
+	// 2) 纯字符串检索降级：在当前激活的 JSON 中做简单定位（对开发/离线环境更友好）
 	push := func(tpe entity.ArtifactType, content json.RawMessage) {
 		if len(content) == 0 || len(hits) >= topK {
 			return
@@ -146,31 +211,41 @@ func (t *artifactSearchTool) InvokableRun(_ context.Context, argumentsInJSON str
 			return
 		}
 		snippet := sliceAround(s, idx, len(q), 160)
-		hits = append(hits, hit{Type: string(tpe), Snippet: snippet})
+		hits = append(hits, hit{
+			ArtifactType: string(tpe),
+			Snippet:      snippet,
+			Score:        0,
+			Source:       "substring",
+		})
 	}
 
-	filter := entity.ArtifactType(strings.TrimSpace(args.Type))
 	if t.in != nil {
-		if filter == "" || filter == entity.ArtifactTypeWorldview {
+		if filterType == "" || filterType == entity.ArtifactTypeWorldview {
 			push(entity.ArtifactTypeWorldview, t.in.CurrentWorldview)
 		}
-		if filter == "" || filter == entity.ArtifactTypeCharacters {
+		if filterType == "" || filterType == entity.ArtifactTypeCharacters {
 			push(entity.ArtifactTypeCharacters, t.in.CurrentCharacters)
 		}
-		if filter == "" || filter == entity.ArtifactTypeOutline {
+		if filterType == "" || filterType == entity.ArtifactTypeOutline {
 			push(entity.ArtifactTypeOutline, t.in.CurrentOutline)
 		}
-		if filter == "" || filter == t.in.Type {
+		if filterType == "" || filterType == t.in.Type {
 			push(t.in.Type, t.in.CurrentArtifactRaw)
 		}
 	}
 
 	out := struct {
-		Query string `json:"query"`
-		Hits  []hit  `json:"hits"`
+		Query          string `json:"query"`
+		Type           string `json:"type,omitempty"`
+		TopK           int    `json:"top_k"`
+		DisabledReason string `json:"disabled_reason,omitempty"`
+		Hits           []hit  `json:"hits"`
 	}{
-		Query: q,
-		Hits:  hits,
+		Query:          q,
+		Type:           strings.TrimSpace(args.Type),
+		TopK:           topK,
+		DisabledReason: strings.TrimSpace(disabledReason),
+		Hits:           hits,
 	}
 	b, _ := json.Marshal(out)
 	return string(b), nil

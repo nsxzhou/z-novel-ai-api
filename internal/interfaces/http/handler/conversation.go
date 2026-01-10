@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"z-novel-ai-api/internal/application/quota"
+	appretrieval "z-novel-ai-api/internal/application/retrieval"
 	"z-novel-ai-api/internal/application/story"
 	"z-novel-ai-api/internal/config"
 	"z-novel-ai-api/internal/domain/entity"
@@ -43,6 +44,7 @@ type ConversationHandler struct {
 	cache        *rediscache.Cache
 	quotaChecker *quota.TokenQuotaChecker
 	generator    *story.ArtifactGenerator
+	indexer      *appretrieval.Indexer
 }
 
 const conversationRollingContextTTL = 30 * 24 * time.Hour
@@ -64,6 +66,7 @@ func NewConversationHandler(
 	cache *rediscache.Cache,
 	quotaChecker *quota.TokenQuotaChecker,
 	generator *story.ArtifactGenerator,
+	indexer *appretrieval.Indexer,
 ) *ConversationHandler {
 	return &ConversationHandler{
 		cfg:          cfg,
@@ -78,6 +81,7 @@ func NewConversationHandler(
 		cache:        cache,
 		quotaChecker: quotaChecker,
 		generator:    generator,
+		indexer:      indexer,
 	}
 }
 
@@ -478,6 +482,8 @@ func (h *ConversationHandler) SendMessage(c *gin.Context) {
 
 	start := time.Now()
 	out, genErr := h.generator.Generate(ctx, &story.ArtifactGenerateInput{
+		TenantID:            tenantID,
+		ProjectID:           projectID,
 		ProjectTitle:        project.Title,
 		ProjectDescription:  project.Description,
 		Type:                artifactType,
@@ -674,6 +680,19 @@ func (h *ConversationHandler) SendMessage(c *gin.Context) {
 		logger.Error(ctx, "failed to persist artifact version", err)
 		dto.InternalError(c, "failed to persist result")
 		return
+	}
+
+	// 同步写索引（仅对激活版本）
+	if activate && snapshot != nil && h.indexer != nil {
+		indexCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := h.indexer.IndexArtifactJSON(indexCtx, tenantID, projectID, out.Type, snapshot.ArtifactID, snapshot.Content); err != nil && !errors.Is(err, appretrieval.ErrVectorDisabled) {
+			logger.Warn(ctx, "failed to index artifact",
+				"error", err.Error(),
+				"artifact_id", snapshot.ArtifactID,
+				"artifact_type", string(out.Type),
+			)
+		}
 	}
 
 	dto.Success(c, &dto.SendMessageResponse{

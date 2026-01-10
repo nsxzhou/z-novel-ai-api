@@ -8,10 +8,14 @@ package wire
 
 import (
 	"context"
+	"github.com/cloudwego/eino/components/embedding"
+	"github.com/google/wire"
 	"z-novel-ai-api/internal/application/quota"
+	"z-novel-ai-api/internal/application/retrieval"
 	"z-novel-ai-api/internal/application/story"
 	"z-novel-ai-api/internal/config"
 	"z-novel-ai-api/internal/domain/repository"
+	embedding2 "z-novel-ai-api/internal/infrastructure/embedding"
 	"z-novel-ai-api/internal/infrastructure/llm"
 	"z-novel-ai-api/internal/infrastructure/messaging"
 	"z-novel-ai-api/internal/infrastructure/persistence/milvus"
@@ -20,8 +24,7 @@ import (
 	"z-novel-ai-api/internal/interfaces/http/handler"
 	"z-novel-ai-api/internal/interfaces/http/middleware"
 	"z-novel-ai-api/internal/interfaces/http/router"
-
-	"github.com/google/wire"
+	"z-novel-ai-api/pkg/logger"
 )
 
 // Injectors from wire.go:
@@ -167,41 +170,49 @@ func InitializeApp(ctx context.Context, cfg *config.Config) (*router.Router, fun
 		cleanup()
 		return nil, nil, err
 	}
-	cache := redis.NewCache(redisClient)
 	producer := ProvideMessagingProducer(redisClient, cfg)
+	tokenQuotaChecker := quota.NewTokenQuotaChecker(tenantRepository)
+	chapterHandler := handler.NewChapterHandler(cfg, chapterRepository, projectRepository, jobRepository, producer, tokenQuotaChecker)
 	entityRepository := postgres.NewEntityRepository(client)
 	relationRepository := postgres.NewRelationRepository(client)
 	entityHandler := handler.NewEntityHandler(entityRepository, relationRepository)
 	txManager := postgres.NewTxManager(client)
 	tenantContext := postgres.NewTenantContext(client)
-	tokenQuotaChecker := quota.NewTokenQuotaChecker(tenantRepository)
 	einoFactory := llm.NewEinoFactory(cfg)
-	chapterGenerator := story.NewChapterGenerator(einoFactory)
-	chapterHandler := handler.NewChapterHandler(cfg, chapterRepository, projectRepository, jobRepository, producer, tokenQuotaChecker)
 	foundationGenerator := story.NewFoundationGenerator(einoFactory)
 	foundationApplier := story.NewFoundationApplier(projectRepository, entityRepository, relationRepository, volumeRepository, chapterRepository)
 	foundationHandler := handler.NewFoundationHandler(cfg, txManager, tenantContext, tenantRepository, projectRepository, jobRepository, producer, tokenQuotaChecker, foundationGenerator, foundationApplier)
 	conversationSessionRepository := postgres.NewConversationSessionRepository(client)
 	conversationTurnRepository := postgres.NewConversationTurnRepository(client)
 	artifactRepository := postgres.NewArtifactRepository(client)
-	artifactGenerator := story.NewArtifactGenerator(einoFactory)
-	conversationHandler := handler.NewConversationHandler(cfg, txManager, tenantContext, tenantRepository, projectRepository, jobRepository, conversationSessionRepository, conversationTurnRepository, artifactRepository, cache, tokenQuotaChecker, artifactGenerator)
-	projectCreationSessionRepository := postgres.NewProjectCreationSessionRepository(client)
-	projectCreationTurnRepository := postgres.NewProjectCreationTurnRepository(client)
-	llmUsageEventRepository := postgres.NewLLMUsageEventRepository(client)
-	projectCreationGenerator := story.NewProjectCreationGenerator(einoFactory)
-	projectCreationHandler := handler.NewProjectCreationHandler(cfg, txManager, tenantContext, tenantRepository, projectRepository, conversationSessionRepository, projectCreationSessionRepository, projectCreationTurnRepository, jobRepository, llmUsageEventRepository, tokenQuotaChecker, projectCreationGenerator)
-	artifactHandler := handler.NewArtifactHandler(artifactRepository)
-	jobHandler := handler.NewJobHandler(jobRepository)
-	retrievalGRPCConn, cleanup3, err := ProvideRetrievalGRPCConn(ctx, cfg)
+	cache := redis.NewCache(redisClient)
+	embedder, err := ProvideEmbedderOptional(ctx, cfg)
 	if err != nil {
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	retrievalServiceClient := ProvideRetrievalGRPCClient(retrievalGRPCConn)
-	retrievalHandler := handler.NewRetrievalHandler(retrievalServiceClient)
-	streamHandler := handler.NewStreamHandler(cfg, chapterRepository, projectRepository, jobRepository, txManager, tenantContext, tokenQuotaChecker, chapterGenerator)
+	milvusClient, cleanup3, err := ProvideMilvusClientOptional(ctx, cfg)
+	if err != nil {
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	repository := ProvideMilvusRepositoryOptional(milvusClient)
+	engine := ProvideRetrievalEngine(cfg, embedder, repository, entityRepository)
+	artifactGenerator := story.NewArtifactGenerator(einoFactory, engine)
+	indexer := ProvideRetrievalIndexer(cfg, embedder, repository)
+	conversationHandler := handler.NewConversationHandler(cfg, txManager, tenantContext, tenantRepository, projectRepository, jobRepository, conversationSessionRepository, conversationTurnRepository, artifactRepository, cache, tokenQuotaChecker, artifactGenerator, indexer)
+	projectCreationSessionRepository := postgres.NewProjectCreationSessionRepository(client)
+	projectCreationTurnRepository := postgres.NewProjectCreationTurnRepository(client)
+	llmUsageEventRepository := postgres.NewLLMUsageEventRepository(client)
+	projectCreationGenerator := story.NewProjectCreationGenerator(einoFactory)
+	projectCreationHandler := handler.NewProjectCreationHandler(cfg, txManager, tenantContext, tenantRepository, projectRepository, conversationSessionRepository, projectCreationSessionRepository, projectCreationTurnRepository, jobRepository, llmUsageEventRepository, tokenQuotaChecker, projectCreationGenerator)
+	artifactHandler := handler.NewArtifactHandler(artifactRepository, indexer)
+	jobHandler := handler.NewJobHandler(jobRepository)
+	retrievalHandler := handler.NewRetrievalHandler(engine)
+	chapterGenerator := story.NewChapterGenerator(einoFactory)
+	streamHandler := handler.NewStreamHandler(cfg, chapterRepository, projectRepository, jobRepository, txManager, tenantContext, tokenQuotaChecker, chapterGenerator, indexer, engine)
 	userHandler := handler.NewUserHandler(userRepository)
 	tenantHandler := handler.NewTenantHandler(tenantRepository)
 	eventRepository := postgres.NewEventRepository(client)
@@ -319,6 +330,23 @@ var MilvusSet = wire.NewSet(
 	ProvideMilvusClient, milvus.NewRepository,
 )
 
+// MilvusAppSet API 网关可选 Milvus（不可达时不阻塞启动）
+var MilvusAppSet = wire.NewSet(
+	ProvideMilvusClientOptional,
+	ProvideMilvusRepositoryOptional,
+)
+
+// EmbeddingSet 可选 Embedder（不可用时禁用向量检索/索引）
+var EmbeddingSet = wire.NewSet(
+	ProvideEmbedderOptional,
+)
+
+// RetrievalSet 本地检索引擎（HTTP + 生成侧共用）
+var RetrievalSet = wire.NewSet(
+	ProvideRetrievalEngine,
+	ProvideRetrievalIndexer,
+)
+
 // GRPCClientsSet gRPC 客户端提供者集合
 var GRPCClientsSet = wire.NewSet(
 	ProvideRetrievalGRPCConn,
@@ -333,7 +361,7 @@ var GRPCClientsSet = wire.NewSet(
 
 // RouterSet 路由器提供者集合
 var RouterSet = wire.NewSet(
-	ProvideAuthConfig, llm.NewEinoFactory, story.NewFoundationGenerator, story.NewArtifactGenerator, quota.NewTokenQuotaChecker, story.NewFoundationApplier, story.NewProjectCreationGenerator, handler.NewAuthHandler, handler.NewHealthHandler, handler.NewProjectHandler, handler.NewVolumeHandler, handler.NewChapterHandler, handler.NewEntityHandler, handler.NewFoundationHandler, handler.NewConversationHandler, handler.NewProjectCreationHandler, handler.NewArtifactHandler, handler.NewJobHandler, handler.NewRetrievalHandler, handler.NewStreamHandler, handler.NewUserHandler, handler.NewTenantHandler, handler.NewEventHandler, handler.NewRelationHandler, wire.Struct(new(router.RouterHandlers), "*"), router.NewWithDeps,
+	ProvideAuthConfig, llm.NewEinoFactory, story.NewChapterGenerator, story.NewFoundationGenerator, story.NewArtifactGenerator, quota.NewTokenQuotaChecker, story.NewFoundationApplier, story.NewProjectCreationGenerator, handler.NewAuthHandler, handler.NewHealthHandler, handler.NewProjectHandler, handler.NewVolumeHandler, handler.NewChapterHandler, handler.NewEntityHandler, handler.NewFoundationHandler, handler.NewConversationHandler, handler.NewProjectCreationHandler, handler.NewArtifactHandler, handler.NewJobHandler, handler.NewRetrievalHandler, handler.NewStreamHandler, handler.NewUserHandler, handler.NewTenantHandler, handler.NewEventHandler, handler.NewRelationHandler, wire.Struct(new(router.RouterHandlers), "*"), router.NewWithDeps,
 )
 
 // RepoSet 整合了具体实现与接口绑定的集合
@@ -376,7 +404,7 @@ func ProvideMessagingProducer(redisClient *redis.Client, cfg *config.Config) *me
 
 // ProvideMilvusClient 提供 Milvus 客户端
 func ProvideMilvusClient(ctx context.Context, cfg *config.Config) (*milvus.Client, func(), error) {
-	client, err := milvus.NewClient(ctx, &cfg.Database.Milvus)
+	client, err := milvus.NewClient(ctx, &cfg.Vector.Milvus)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -384,6 +412,50 @@ func ProvideMilvusClient(ctx context.Context, cfg *config.Config) (*milvus.Clien
 		client.Close()
 	}
 	return client, cleanup, nil
+}
+
+func ProvideMilvusClientOptional(ctx context.Context, cfg *config.Config) (*milvus.Client, func(), error) {
+	client, err := milvus.NewClient(ctx, &cfg.Vector.Milvus)
+	if err != nil {
+		logger.Warn(ctx, "milvus not available, vector features disabled", "error", err.Error())
+		return nil, func() {}, nil
+	}
+	cleanup := func() {
+		_ = client.Close()
+	}
+	return client, cleanup, nil
+}
+
+func ProvideMilvusRepositoryOptional(client *milvus.Client) *milvus.Repository {
+	if client == nil {
+		return nil
+	}
+	return milvus.NewRepository(client)
+}
+
+func ProvideEmbedderOptional(ctx context.Context, cfg *config.Config) (embedding.Embedder, error) {
+	embedder, err := embedding2.NewEinoEmbedder(ctx, &cfg.Embedding)
+	if err != nil {
+		logger.Warn(ctx, "embedding not available, vector features disabled", "error", err.Error())
+		return nil, nil
+	}
+	return embedder, nil
+}
+
+func ProvideRetrievalEngine(cfg *config.Config, embedder embedding.Embedder, vectorRepo *milvus.Repository, entityRepo repository.EntityRepository) *retrieval.Engine {
+	bs := 0
+	if cfg != nil {
+		bs = cfg.Embedding.BatchSize
+	}
+	return retrieval.NewEngine(embedder, vectorRepo, entityRepo, bs)
+}
+
+func ProvideRetrievalIndexer(cfg *config.Config, embedder embedding.Embedder, vectorRepo *milvus.Repository) *retrieval.Indexer {
+	bs := 0
+	if cfg != nil {
+		bs = cfg.Embedding.BatchSize
+	}
+	return retrieval.NewIndexer(embedder, vectorRepo, bs)
 }
 
 // ProvideAuthConfig 提供认证配置
