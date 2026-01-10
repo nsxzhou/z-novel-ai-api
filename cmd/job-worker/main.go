@@ -84,8 +84,9 @@ func main() {
 	if err != nil {
 		logger.Warn(ctx, "embedding not available, vector indexing disabled", "error", err.Error())
 	} else if vectorRepo != nil {
-		indexer = appretrieval.NewIndexer(embedder, vectorRepo, cfg.Embedding.BatchSize)
-		retrievalEngine = appretrieval.NewEngine(embedder, vectorRepo, nil, cfg.Embedding.BatchSize)
+		vectorPort := milvus.NewRetrievalVectorRepository(vectorRepo)
+		indexer = appretrieval.NewIndexer(embedder, vectorPort, cfg.Embedding.BatchSize)
+		retrievalEngine = appretrieval.NewEngine(embedder, vectorPort, nil, cfg.Embedding.BatchSize)
 	}
 
 	// 2. 初始化 Repositories

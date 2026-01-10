@@ -9,7 +9,6 @@ import (
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 
-	"z-novel-ai-api/internal/infrastructure/llm"
 	einoobs "z-novel-ai-api/internal/observability/eino"
 	workflowprompt "z-novel-ai-api/internal/workflow/prompt"
 )
@@ -40,10 +39,10 @@ type ChapterGenerateOutput struct {
 }
 
 type ChapterGenerator struct {
-	factory *llm.EinoFactory
+	factory ChatModelFactory
 }
 
-func NewChapterGenerator(factory *llm.EinoFactory) *ChapterGenerator {
+func NewChapterGenerator(factory ChatModelFactory) *ChapterGenerator {
 	return &ChapterGenerator{factory: factory}
 }
 

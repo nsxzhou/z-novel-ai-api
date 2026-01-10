@@ -16,7 +16,6 @@ import (
 
 	appretrieval "z-novel-ai-api/internal/application/retrieval"
 	"z-novel-ai-api/internal/domain/entity"
-	"z-novel-ai-api/internal/infrastructure/llm"
 	einoobs "z-novel-ai-api/internal/observability/eino"
 	workflowprompt "z-novel-ai-api/internal/workflow/prompt"
 	"z-novel-ai-api/pkg/logger"
@@ -69,7 +68,7 @@ type ArtifactGenerateOutput struct {
 }
 
 type ArtifactGenerator struct {
-	factory         *llm.EinoFactory
+	factory         ChatModelFactory
 	retrievalEngine *appretrieval.Engine
 
 	graphOnce sync.Once
@@ -81,7 +80,7 @@ type ArtifactGenerator struct {
 	toolsNodeErr  error
 }
 
-func NewArtifactGenerator(factory *llm.EinoFactory, retrievalEngine *appretrieval.Engine) *ArtifactGenerator {
+func NewArtifactGenerator(factory ChatModelFactory, retrievalEngine *appretrieval.Engine) *ArtifactGenerator {
 	return &ArtifactGenerator{factory: factory, retrievalEngine: retrievalEngine}
 }
 

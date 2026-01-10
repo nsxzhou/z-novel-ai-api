@@ -11,7 +11,6 @@ import (
 	"github.com/google/uuid"
 
 	"z-novel-ai-api/internal/domain/entity"
-	"z-novel-ai-api/internal/infrastructure/persistence/milvus"
 )
 
 const (
@@ -23,14 +22,14 @@ const (
 
 type Indexer struct {
 	embedder embedding.Embedder
-	vector   *milvus.Repository
+	vector   VectorRepository
 
 	embeddingBatchSize int
 	chunkSizeRunes     int
 	chunkOverlapRunes  int
 }
 
-func NewIndexer(embedder embedding.Embedder, vectorRepo *milvus.Repository, embeddingBatchSize int) *Indexer {
+func NewIndexer(embedder embedding.Embedder, vectorRepo VectorRepository, embeddingBatchSize int) *Indexer {
 	bs := embeddingBatchSize
 	if bs <= 0 {
 		bs = defaultEmbeddingBatch
@@ -73,7 +72,7 @@ func (i *Indexer) IndexChapter(ctx context.Context, tenantID, projectID string, 
 	}
 
 	segmentType := "chapter"
-	if err := i.vector.DeleteSegmentsByChapterAndType(ctx, tenantID, projectID, chapter.ID, segmentType); err != nil {
+	if err := i.vector.DeleteSegmentsByDocAndType(ctx, tenantID, projectID, chapter.ID, segmentType); err != nil {
 		return err
 	}
 
@@ -89,7 +88,7 @@ func (i *Indexer) IndexChapter(ctx context.Context, tenantID, projectID string, 
 	}
 
 	embedInputs := make([]string, 0, len(chunks))
-	segments := make([]*milvus.StorySegment, 0, len(chunks))
+	segments := make([]*VectorStorySegment, 0, len(chunks))
 	storyTime := chapter.StoryTimeStart
 	if chapter.StoryTimeEnd > 0 {
 		// 若存在 end，优先使用 end 作为“事件已发生”的上界
@@ -111,11 +110,11 @@ func (i *Indexer) IndexChapter(ctx context.Context, tenantID, projectID string, 
 		}
 
 		embedInputs = append(embedInputs, embedText)
-		segments = append(segments, &milvus.StorySegment{
+		segments = append(segments, &VectorStorySegment{
 			ID:          uuid.NewString(),
 			TenantID:    tenantID,
 			ProjectID:   projectID,
-			ChapterID:   chapter.ID,
+			DocID:       chapter.ID,
 			StoryTime:   storyTime,
 			SegmentType: segmentType,
 			TextContent: textContent,
@@ -154,7 +153,7 @@ func (i *Indexer) IndexArtifactJSON(ctx context.Context, tenantID, projectID str
 		return fmt.Errorf("unsupported artifact_type: %s", artifactType)
 	}
 
-	if err := i.vector.DeleteSegmentsByChapterAndType(ctx, tenantID, projectID, artifactID, segmentType); err != nil {
+	if err := i.vector.DeleteSegmentsByDocAndType(ctx, tenantID, projectID, artifactID, segmentType); err != nil {
 		return err
 	}
 	if len(content) == 0 || strings.TrimSpace(string(content)) == "" {
@@ -173,7 +172,7 @@ func (i *Indexer) IndexArtifactJSON(ctx context.Context, tenantID, projectID str
 	}
 
 	embedInputs := make([]string, 0, len(leaves))
-	segments := make([]*milvus.StorySegment, 0, len(leaves))
+	segments := make([]*VectorStorySegment, 0, len(leaves))
 
 	for _, leaf := range leaves {
 		if strings.TrimSpace(leaf.Text) == "" {
@@ -194,11 +193,11 @@ func (i *Indexer) IndexArtifactJSON(ctx context.Context, tenantID, projectID str
 			embedText := "构件类型：" + string(artifactType) + "\n路径：" + leaf.Path + "\n内容：" + strings.TrimSpace(chunk)
 
 			embedInputs = append(embedInputs, embedText)
-			segments = append(segments, &milvus.StorySegment{
+			segments = append(segments, &VectorStorySegment{
 				ID:          uuid.NewString(),
 				TenantID:    tenantID,
 				ProjectID:   projectID,
-				ChapterID:   artifactID, // 复用字段作为“源文档 ID”（用于定向删除）
+				DocID:       artifactID,
 				StoryTime:   0,
 				SegmentType: segmentType,
 				TextContent: textContent,

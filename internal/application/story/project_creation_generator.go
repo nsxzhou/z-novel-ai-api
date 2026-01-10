@@ -13,7 +13,6 @@ import (
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
 
-	"z-novel-ai-api/internal/infrastructure/llm"
 	einoobs "z-novel-ai-api/internal/observability/eino"
 	workflowprompt "z-novel-ai-api/internal/workflow/prompt"
 	"z-novel-ai-api/pkg/logger"
@@ -76,7 +75,7 @@ type projectCreationLLMEnvelope struct {
 // ProjectCreationGenerator 实现了基于对话的项目创建逻辑。
 // 它使用 Eino 编排一个 Chain，负责维护对话状态机，引导用户完善项目构思。
 type ProjectCreationGenerator struct {
-	factory *llm.EinoFactory
+	factory ChatModelFactory
 
 	chainOnce sync.Once
 	//应用层（你的 Go 代码逻辑）与生成器组件之间的输入输出协议
@@ -84,7 +83,7 @@ type ProjectCreationGenerator struct {
 	chainErr error
 }
 
-func NewProjectCreationGenerator(factory *llm.EinoFactory) *ProjectCreationGenerator {
+func NewProjectCreationGenerator(factory ChatModelFactory) *ProjectCreationGenerator {
 	return &ProjectCreationGenerator{factory: factory}
 }
 

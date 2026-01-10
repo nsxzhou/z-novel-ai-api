@@ -18,7 +18,6 @@ import (
 	"z-novel-ai-api/internal/config"
 	"z-novel-ai-api/internal/domain/entity"
 	"z-novel-ai-api/internal/domain/repository"
-	rediscache "z-novel-ai-api/internal/infrastructure/persistence/redis"
 	"z-novel-ai-api/internal/interfaces/http/dto"
 	"z-novel-ai-api/internal/interfaces/http/middleware"
 	"z-novel-ai-api/pkg/logger"
@@ -41,16 +40,10 @@ type ConversationHandler struct {
 	turnRepo     repository.ConversationTurnRepository
 	artifactRepo repository.ArtifactRepository
 
-	cache        *rediscache.Cache
+	rollingCtx   *story.RollingContextManager
 	quotaChecker *quota.TokenQuotaChecker
 	generator    *story.ArtifactGenerator
 	indexer      *appretrieval.Indexer
-}
-
-const conversationRollingContextTTL = 30 * 24 * time.Hour
-
-func conversationRollingContextKey(tenantID, projectID, sessionID string, task entity.ConversationTask) string {
-	return fmt.Sprintf("ctx:%s:%s:%s:%s:rolling", tenantID, projectID, sessionID, task)
 }
 
 func NewConversationHandler(
@@ -63,7 +56,7 @@ func NewConversationHandler(
 	sessionRepo repository.ConversationSessionRepository,
 	turnRepo repository.ConversationTurnRepository,
 	artifactRepo repository.ArtifactRepository,
-	cache *rediscache.Cache,
+	rollingCtx *story.RollingContextManager,
 	quotaChecker *quota.TokenQuotaChecker,
 	generator *story.ArtifactGenerator,
 	indexer *appretrieval.Indexer,
@@ -78,7 +71,7 @@ func NewConversationHandler(
 		sessionRepo:  sessionRepo,
 		turnRepo:     turnRepo,
 		artifactRepo: artifactRepo,
-		cache:        cache,
+		rollingCtx:   rollingCtx,
 		quotaChecker: quotaChecker,
 		generator:    generator,
 		indexer:      indexer,
@@ -464,16 +457,10 @@ func (h *ConversationHandler) SendMessage(c *gin.Context) {
 
 	conversationSummary := ""
 	recentUserTurns := ""
-	if h.cache != nil && task != "" {
-		key := conversationRollingContextKey(tenantID, projectID, sessionID, task)
-		var rolling story.RollingConversationContext
-		if b, err := h.cache.Get(ctx, key); err == nil && len(b) > 0 {
-			_ = json.Unmarshal(b, &rolling)
-		}
-
-		conversationSummary, recentUserTurns = rolling.SnapshotForPrompt()
-		rolling.AppendUserPrompt(strings.TrimSpace(req.Prompt))
-		if err := h.cache.Set(ctx, key, &rolling, conversationRollingContextTTL); err != nil {
+	if h.rollingCtx != nil && task != "" {
+		var err error
+		conversationSummary, recentUserTurns, err = h.rollingCtx.SnapshotAndAppendUserPrompt(ctx, tenantID, projectID, sessionID, task, req.Prompt)
+		if err != nil {
 			logger.Warn(ctx, "failed to update rolling conversation context",
 				"error", err.Error(),
 			)

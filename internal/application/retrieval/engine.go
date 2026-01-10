@@ -9,27 +9,26 @@ import (
 	"github.com/cloudwego/eino/components/embedding"
 
 	"z-novel-ai-api/internal/domain/repository"
-	"z-novel-ai-api/internal/infrastructure/persistence/milvus"
 )
 
 type Engine struct {
 	embedder embedding.Embedder
-	vector   *milvus.Repository
+	vector   VectorRepository
 	entity   repository.EntityRepository
 
 	embeddingBatchSize int
 }
 
-func NewEngine(embedder embedding.Embedder, vectorRepo *milvus.Repository, entityRepo repository.EntityRepository, embeddingBatchSize int) *Engine {
+func NewEngine(embedder embedding.Embedder, vectorRepo VectorRepository, entityRepo repository.EntityRepository, embeddingBatchSize int) *Engine {
 	bs := embeddingBatchSize
 	if bs <= 0 {
 		bs = defaultEmbeddingBatch
 	}
 	return &Engine{
-		embedder:            embedder,
-		vector:              vectorRepo,
-		entity:              entityRepo,
-		embeddingBatchSize:  bs,
+		embedder:           embedder,
+		vector:             vectorRepo,
+		entity:             entityRepo,
+		embeddingBatchSize: bs,
 	}
 }
 
@@ -93,7 +92,7 @@ func (e *Engine) search(ctx context.Context, in SearchInput, forceDebug bool) (*
 					out.QueryEmbedding = emb
 				}
 
-				results, err := e.vector.SearchSegments(ctx, &milvus.SearchParams{
+				results, err := e.vector.SearchSegments(ctx, &VectorSearchParams{
 					TenantID:         in.TenantID,
 					ProjectID:        in.ProjectID,
 					QueryVector:      emb,
@@ -116,13 +115,13 @@ func (e *Engine) search(ctx context.Context, in SearchInput, forceDebug bool) (*
 							Score:  1 - float64(r.Score), // 将“距离”转换为更直观的相似度（COSINE: distance=1-cos）
 							Source: "vector",
 
-							DocType:       strings.TrimSpace(meta.DocType),
-							ChapterID:     strings.TrimSpace(meta.ChapterID),
-							ChapterTitle:  strings.TrimSpace(meta.ChapterTitle),
-							StoryTime:     r.StoryTime,
-							ArtifactID:    strings.TrimSpace(meta.ArtifactID),
-							ArtifactType:  strings.TrimSpace(meta.ArtifactType),
-							RefPath:       strings.TrimSpace(meta.RefPath),
+							DocType:      strings.TrimSpace(meta.DocType),
+							ChapterID:    strings.TrimSpace(meta.ChapterID),
+							ChapterTitle: strings.TrimSpace(meta.ChapterTitle),
+							StoryTime:    r.StoryTime,
+							ArtifactID:   strings.TrimSpace(meta.ArtifactID),
+							ArtifactType: strings.TrimSpace(meta.ArtifactType),
+							RefPath:      strings.TrimSpace(meta.RefPath),
 						}
 
 						// 兼容：历史数据可能没有 meta，回退使用 Milvus 字段

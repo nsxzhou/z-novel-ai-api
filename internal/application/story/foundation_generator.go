@@ -15,7 +15,6 @@ import (
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
 
-	"z-novel-ai-api/internal/infrastructure/llm"
 	einoobs "z-novel-ai-api/internal/observability/eino"
 	workflowprompt "z-novel-ai-api/internal/workflow/prompt"
 	"z-novel-ai-api/pkg/logger"
@@ -56,14 +55,14 @@ type FoundationGenerateOutput struct {
 }
 
 type FoundationGenerator struct {
-	factory *llm.EinoFactory
+	factory ChatModelFactory
 
 	chainOnce sync.Once
 	chain     compose.Runnable[*FoundationGenerateInput, *FoundationGenerateOutput]
 	chainErr  error
 }
 
-func NewFoundationGenerator(factory *llm.EinoFactory) *FoundationGenerator {
+func NewFoundationGenerator(factory ChatModelFactory) *FoundationGenerator {
 	return &FoundationGenerator{factory: factory}
 }
 

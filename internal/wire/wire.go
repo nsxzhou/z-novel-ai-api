@@ -146,6 +146,7 @@ var RedisSet = wire.NewSet(
 	ProvideRedisClient,
 	redis.NewCache,
 	redis.NewRateLimiter,
+	wire.Bind(new(story.KVCache), new(*redis.Cache)),
 	wire.Bind(new(middleware.RateLimiter), new(*redis.RateLimiter)),
 )
 
@@ -164,6 +165,7 @@ var MilvusSet = wire.NewSet(
 var MilvusAppSet = wire.NewSet(
 	ProvideMilvusClientOptional,
 	ProvideMilvusRepositoryOptional,
+	ProvideRetrievalVectorRepositoryOptional,
 )
 
 // EmbeddingSet 可选 Embedder（不可用时禁用向量检索/索引）
@@ -199,6 +201,7 @@ var RouterSet = wire.NewSet(
 	quota.NewTokenQuotaChecker,
 	story.NewFoundationApplier,
 	story.NewProjectCreationGenerator,
+	story.NewRollingContextManager,
 	handler.NewAuthHandler,
 	handler.NewHealthHandler,
 	handler.NewProjectHandler,
@@ -307,6 +310,13 @@ func ProvideMilvusRepositoryOptional(client *milvus.Client) *milvus.Repository {
 	return milvus.NewRepository(client)
 }
 
+func ProvideRetrievalVectorRepositoryOptional(repo *milvus.Repository) retrieval.VectorRepository {
+	if repo == nil {
+		return nil
+	}
+	return milvus.NewRetrievalVectorRepository(repo)
+}
+
 func ProvideEmbedderOptional(ctx context.Context, cfg *config.Config) (einoembedding.Embedder, error) {
 	embedder, err := infraembedding.NewEinoEmbedder(ctx, &cfg.Embedding)
 	if err != nil {
@@ -316,7 +326,7 @@ func ProvideEmbedderOptional(ctx context.Context, cfg *config.Config) (einoembed
 	return embedder, nil
 }
 
-func ProvideRetrievalEngine(cfg *config.Config, embedder einoembedding.Embedder, vectorRepo *milvus.Repository, entityRepo repository.EntityRepository) *retrieval.Engine {
+func ProvideRetrievalEngine(cfg *config.Config, embedder einoembedding.Embedder, vectorRepo retrieval.VectorRepository, entityRepo repository.EntityRepository) *retrieval.Engine {
 	bs := 0
 	if cfg != nil {
 		bs = cfg.Embedding.BatchSize
@@ -324,7 +334,7 @@ func ProvideRetrievalEngine(cfg *config.Config, embedder einoembedding.Embedder,
 	return retrieval.NewEngine(embedder, vectorRepo, entityRepo, bs)
 }
 
-func ProvideRetrievalIndexer(cfg *config.Config, embedder einoembedding.Embedder, vectorRepo *milvus.Repository) *retrieval.Indexer {
+func ProvideRetrievalIndexer(cfg *config.Config, embedder einoembedding.Embedder, vectorRepo retrieval.VectorRepository) *retrieval.Indexer {
 	bs := 0
 	if cfg != nil {
 		bs = cfg.Embedding.BatchSize

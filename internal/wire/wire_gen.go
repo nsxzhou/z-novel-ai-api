@@ -186,6 +186,7 @@ func InitializeApp(ctx context.Context, cfg *config.Config) (*router.Router, fun
 	conversationTurnRepository := postgres.NewConversationTurnRepository(client)
 	artifactRepository := postgres.NewArtifactRepository(client)
 	cache := redis.NewCache(redisClient)
+	rollingContextManager := story.NewRollingContextManager(cache)
 	embedder, err := ProvideEmbedderOptional(ctx, cfg)
 	if err != nil {
 		cleanup2()
@@ -200,10 +201,11 @@ func InitializeApp(ctx context.Context, cfg *config.Config) (*router.Router, fun
 	}
 	healthHandler := handler.NewHealthHandler(client, redisClient, milvusClient)
 	repository := ProvideMilvusRepositoryOptional(milvusClient)
-	engine := ProvideRetrievalEngine(cfg, embedder, repository, entityRepository)
+	vectorRepository := ProvideRetrievalVectorRepositoryOptional(repository)
+	engine := ProvideRetrievalEngine(cfg, embedder, vectorRepository, entityRepository)
 	artifactGenerator := story.NewArtifactGenerator(einoFactory, engine)
-	indexer := ProvideRetrievalIndexer(cfg, embedder, repository)
-	conversationHandler := handler.NewConversationHandler(cfg, txManager, tenantContext, tenantRepository, projectRepository, jobRepository, conversationSessionRepository, conversationTurnRepository, artifactRepository, cache, tokenQuotaChecker, artifactGenerator, indexer)
+	indexer := ProvideRetrievalIndexer(cfg, embedder, vectorRepository)
+	conversationHandler := handler.NewConversationHandler(cfg, txManager, tenantContext, tenantRepository, projectRepository, jobRepository, conversationSessionRepository, conversationTurnRepository, artifactRepository, rollingContextManager, tokenQuotaChecker, artifactGenerator, indexer)
 	projectCreationSessionRepository := postgres.NewProjectCreationSessionRepository(client)
 	projectCreationTurnRepository := postgres.NewProjectCreationTurnRepository(client)
 	llmUsageEventRepository := postgres.NewLLMUsageEventRepository(client)
@@ -318,7 +320,7 @@ var PostgresSet = wire.NewSet(
 
 // RedisSet Redis 提供者集合
 var RedisSet = wire.NewSet(
-	ProvideRedisClient, redis.NewCache, redis.NewRateLimiter, wire.Bind(new(middleware.RateLimiter), new(*redis.RateLimiter)),
+	ProvideRedisClient, redis.NewCache, redis.NewRateLimiter, wire.Bind(new(story.KVCache), new(*redis.Cache)), wire.Bind(new(middleware.RateLimiter), new(*redis.RateLimiter)),
 )
 
 // MessagingSet 消息队列提供者集合
@@ -335,6 +337,7 @@ var MilvusSet = wire.NewSet(
 var MilvusAppSet = wire.NewSet(
 	ProvideMilvusClientOptional,
 	ProvideMilvusRepositoryOptional,
+	ProvideRetrievalVectorRepositoryOptional,
 )
 
 // EmbeddingSet 可选 Embedder（不可用时禁用向量检索/索引）
@@ -362,7 +365,7 @@ var GRPCClientsSet = wire.NewSet(
 
 // RouterSet 路由器提供者集合
 var RouterSet = wire.NewSet(
-	ProvideAuthConfig, llm.NewEinoFactory, story.NewChapterGenerator, story.NewFoundationGenerator, story.NewArtifactGenerator, quota.NewTokenQuotaChecker, story.NewFoundationApplier, story.NewProjectCreationGenerator, handler.NewAuthHandler, handler.NewHealthHandler, handler.NewProjectHandler, handler.NewVolumeHandler, handler.NewChapterHandler, handler.NewEntityHandler, handler.NewFoundationHandler, handler.NewConversationHandler, handler.NewProjectCreationHandler, handler.NewArtifactHandler, handler.NewJobHandler, handler.NewRetrievalHandler, handler.NewStreamHandler, handler.NewUserHandler, handler.NewTenantHandler, handler.NewEventHandler, handler.NewRelationHandler, wire.Struct(new(router.RouterHandlers), "*"), router.NewWithDeps,
+	ProvideAuthConfig, llm.NewEinoFactory, story.NewChapterGenerator, story.NewFoundationGenerator, story.NewArtifactGenerator, quota.NewTokenQuotaChecker, story.NewFoundationApplier, story.NewProjectCreationGenerator, story.NewRollingContextManager, handler.NewAuthHandler, handler.NewHealthHandler, handler.NewProjectHandler, handler.NewVolumeHandler, handler.NewChapterHandler, handler.NewEntityHandler, handler.NewFoundationHandler, handler.NewConversationHandler, handler.NewProjectCreationHandler, handler.NewArtifactHandler, handler.NewJobHandler, handler.NewRetrievalHandler, handler.NewStreamHandler, handler.NewUserHandler, handler.NewTenantHandler, handler.NewEventHandler, handler.NewRelationHandler, wire.Struct(new(router.RouterHandlers), "*"), router.NewWithDeps,
 )
 
 // RepoSet 整合了具体实现与接口绑定的集合
@@ -434,6 +437,13 @@ func ProvideMilvusRepositoryOptional(client *milvus.Client) *milvus.Repository {
 	return milvus.NewRepository(client)
 }
 
+func ProvideRetrievalVectorRepositoryOptional(repo *milvus.Repository) retrieval.VectorRepository {
+	if repo == nil {
+		return nil
+	}
+	return milvus.NewRetrievalVectorRepository(repo)
+}
+
 func ProvideEmbedderOptional(ctx context.Context, cfg *config.Config) (embedding.Embedder, error) {
 	embedder, err := embedding2.NewEinoEmbedder(ctx, &cfg.Embedding)
 	if err != nil {
@@ -443,7 +453,7 @@ func ProvideEmbedderOptional(ctx context.Context, cfg *config.Config) (embedding
 	return embedder, nil
 }
 
-func ProvideRetrievalEngine(cfg *config.Config, embedder embedding.Embedder, vectorRepo *milvus.Repository, entityRepo repository.EntityRepository) *retrieval.Engine {
+func ProvideRetrievalEngine(cfg *config.Config, embedder embedding.Embedder, vectorRepo retrieval.VectorRepository, entityRepo repository.EntityRepository) *retrieval.Engine {
 	bs := 0
 	if cfg != nil {
 		bs = cfg.Embedding.BatchSize
@@ -451,7 +461,7 @@ func ProvideRetrievalEngine(cfg *config.Config, embedder embedding.Embedder, vec
 	return retrieval.NewEngine(embedder, vectorRepo, entityRepo, bs)
 }
 
-func ProvideRetrievalIndexer(cfg *config.Config, embedder embedding.Embedder, vectorRepo *milvus.Repository) *retrieval.Indexer {
+func ProvideRetrievalIndexer(cfg *config.Config, embedder embedding.Embedder, vectorRepo retrieval.VectorRepository) *retrieval.Indexer {
 	bs := 0
 	if cfg != nil {
 		bs = cfg.Embedding.BatchSize
