@@ -133,9 +133,9 @@ func (r *Router) setupMiddleware() {
 // setupSystemRoutes 配置系统路由
 func (r *Router) setupSystemRoutes() {
 	// 系统端点（不需要认证）
-	r.engine.GET("/health", r.healthHandler.Health)
-	r.engine.GET("/ready", r.healthHandler.Ready)
-	r.engine.GET("/live", r.healthHandler.Live)
+	r.engine.GET("/health", r.Handlers.Health.Health)
+	r.engine.GET("/ready", r.Handlers.Health.Ready)
+	r.engine.GET("/live", r.Handlers.Health.Live)
 
 	// Prometheus 指标端点
 	if r.cfg.Observability.Metrics.Enabled {
@@ -152,7 +152,7 @@ func (r *Router) setupBusinessRoutes() {
 	v1.Use(middleware.Auth(middleware.AuthConfig{
 		Secret:    r.cfg.Security.JWT.Secret,
 		Issuer:    r.cfg.Security.JWT.Issuer,
-		SkipPaths: append(middleware.DefaultSkipPaths, "/v1/auth/login", "/v1/auth/refresh"),
+		SkipPaths: append(middleware.DefaultSkipPaths, "/v1/auth/login", "/v1/auth/refresh", "/v1/auth/register"),
 		Enabled:   true,
 	}))
 

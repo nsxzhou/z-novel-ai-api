@@ -1,15 +1,25 @@
 #!/bin/bash
+set -euo pipefail
 
 # 配置
-API_URL="http://localhost:8080/v1"
-ADMIN_EMAIL="admin@example.com"
-ADMIN_PASSWORD="admin-password-123"
+API_URL="${API_URL:-http://localhost:8080/v1}"
+TENANT_ID="${TENANT_ID:-}"
+
+# 默认与 cmd/bootstrap/main.go 保持一致（可通过环境变量覆盖）
+ADMIN_EMAIL="${ADMIN_EMAIL:-admin@nsxzhou.fun}"
+ADMIN_PASSWORD="${ADMIN_PASSWORD:-admin123}"
+
+if [ -z "$TENANT_ID" ]; then
+  echo "TENANT_ID is required."
+  echo "Tip: run \"go run ./cmd/bootstrap\" and copy the printed default tenant ID."
+  exit 1
+fi
 
 # 1. 登录
 echo "Logging in as admin..."
 LOGIN_RESP=$(curl -s -X POST "$API_URL/auth/login" \
   -H "Content-Type: application/json" \
-  -d "{\"email\": \"$ADMIN_EMAIL\", \"password\": \"$ADMIN_PASSWORD\"}")
+  -d "{\"email\": \"$ADMIN_EMAIL\", \"password\": \"$ADMIN_PASSWORD\", \"tenant_id\": \"$TENANT_ID\"}")
 
 TOKEN=$(echo $LOGIN_RESP | grep -oE '"access_token":"[^"]+"' | cut -d'"' -f4)
 
@@ -23,25 +33,35 @@ echo "Login successful."
 echo "Getting current user info..."
 curl -s -X GET "$API_URL/users/me" -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
 
-# 3. 创建新租户
-echo "Creating a new tenant..."
-NEW_TENANT_SLUG="test-tenant-$(date +%s)"
-CREATE_TENANT_RESP=$(curl -s -X POST "$API_URL/tenants" \
+# 3. 打开当前租户公开注册（默认关闭）
+echo "Enabling public registration for current tenant..."
+curl -s -X PUT "$API_URL/tenants/current" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d "{\"name\": \"Test Tenant\", \"slug\": \"$NEW_TENANT_SLUG\"}")
+  -d "{\"settings\": {\"allow_public_registration\": true}}" | python3 -m json.tool
 
-echo "Create tenant response: $CREATE_TENANT_RESP"
-TENANT_ID=$(echo $CREATE_TENANT_RESP | grep -oE '"id":"[^"]+"' | cut -d'"' -f4)
-
-# 4. 列出所有租户
+# 4. 列出所有租户（admin）
 echo "Listing all tenants..."
 curl -s -X GET "$API_URL/tenants" -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
 
-# 5. 在新租户中注册用户
-echo "Registering a member in the new tenant..."
+# 5. 在当前租户中注册用户（无需登录）
+MEMBER_EMAIL="member-$(date +%s)@test.com"
+MEMBER_PASSWORD="password123"
+echo "Registering a member in the current tenant..."
 curl -s -X POST "$API_URL/auth/register" \
   -H "Content-Type: application/json" \
-  -d "{\"email\": \"member@test.com\", \"password\": \"password123\", \"name\": \"Test Member\", \"tenant_id\": \"$TENANT_ID\"}" | python3 -m json.tool
+  -d "{\"email\": \"$MEMBER_EMAIL\", \"password\": \"$MEMBER_PASSWORD\", \"name\": \"Test Member\", \"tenant_id\": \"$TENANT_ID\"}" | python3 -m json.tool
+
+# 6. 使用新用户登录验证
+echo "Logging in as member..."
+MEMBER_LOGIN_RESP=$(curl -s -X POST "$API_URL/auth/login" \
+  -H "Content-Type: application/json" \
+  -d "{\"email\": \"$MEMBER_EMAIL\", \"password\": \"$MEMBER_PASSWORD\", \"tenant_id\": \"$TENANT_ID\"}")
+MEMBER_TOKEN=$(echo $MEMBER_LOGIN_RESP | grep -oE '"access_token":"[^"]+"' | cut -d'"' -f4)
+if [ -z "$MEMBER_TOKEN" ]; then
+  echo "Member login failed: $MEMBER_LOGIN_RESP"
+  exit 1
+fi
+echo "Member login successful."
 
 echo "Verification completed."

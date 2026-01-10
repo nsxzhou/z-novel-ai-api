@@ -8,8 +8,6 @@ package wire
 
 import (
 	"context"
-	"github.com/cloudwego/eino/components/embedding"
-	"github.com/google/wire"
 	"z-novel-ai-api/internal/application/quota"
 	"z-novel-ai-api/internal/application/retrieval"
 	"z-novel-ai-api/internal/application/story"
@@ -25,6 +23,9 @@ import (
 	"z-novel-ai-api/internal/interfaces/http/middleware"
 	"z-novel-ai-api/internal/interfaces/http/router"
 	"z-novel-ai-api/pkg/logger"
+
+	"github.com/cloudwego/eino/components/embedding"
+	"github.com/google/wire"
 )
 
 // Injectors from wire.go:
@@ -158,7 +159,6 @@ func InitializeApp(ctx context.Context, cfg *config.Config) (*router.Router, fun
 	userRepository := postgres.NewUserRepository(client)
 	tenantRepository := postgres.NewTenantRepository(client)
 	authHandler := handler.NewAuthHandler(authConfig, userRepository, tenantRepository)
-	healthHandler := handler.NewHealthHandler()
 	projectRepository := postgres.NewProjectRepository(client)
 	projectHandler := handler.NewProjectHandler(projectRepository)
 	volumeRepository := postgres.NewVolumeRepository(client)
@@ -198,6 +198,7 @@ func InitializeApp(ctx context.Context, cfg *config.Config) (*router.Router, fun
 		cleanup()
 		return nil, nil, err
 	}
+	healthHandler := handler.NewHealthHandler(client, redisClient, milvusClient)
 	repository := ProvideMilvusRepositoryOptional(milvusClient)
 	engine := ProvideRetrievalEngine(cfg, embedder, repository, entityRepository)
 	artifactGenerator := story.NewArtifactGenerator(einoFactory, engine)
