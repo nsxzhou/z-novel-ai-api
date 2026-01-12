@@ -10,12 +10,13 @@ import (
 	"time"
 
 	"z-novel-ai-api/internal/application/quota"
-	"z-novel-ai-api/internal/application/story"
+	storyprojectcreation "z-novel-ai-api/internal/application/story/projectcreation"
 	"z-novel-ai-api/internal/config"
 	"z-novel-ai-api/internal/domain/entity"
 	"z-novel-ai-api/internal/domain/repository"
 	"z-novel-ai-api/internal/interfaces/http/dto"
 	"z-novel-ai-api/internal/interfaces/http/middleware"
+	wfmodel "z-novel-ai-api/internal/workflow/model"
 	"z-novel-ai-api/pkg/logger"
 
 	"github.com/gin-gonic/gin"
@@ -39,7 +40,7 @@ type ProjectCreationHandler struct {
 	llmUsageRepo repository.LLMUsageEventRepository
 
 	quotaChecker *quota.TokenQuotaChecker
-	generator    *story.ProjectCreationGenerator
+	generator    *storyprojectcreation.ProjectCreationGenerator
 }
 
 func NewProjectCreationHandler(
@@ -54,7 +55,7 @@ func NewProjectCreationHandler(
 	jobRepo repository.JobRepository,
 	llmUsageRepo repository.LLMUsageEventRepository,
 	quotaChecker *quota.TokenQuotaChecker,
-	generator *story.ProjectCreationGenerator,
+	generator *storyprojectcreation.ProjectCreationGenerator,
 ) *ProjectCreationHandler {
 	return &ProjectCreationHandler{
 		cfg:           cfg,
@@ -230,7 +231,7 @@ func (h *ProjectCreationHandler) SendMessage(c *gin.Context) {
 	}
 
 	// 3. LLM 生成 (无事务，耗时操作)
-	input := &story.ProjectCreationGenerateInput{
+	input := &wfmodel.ProjectCreationGenerateInput{
 		Stage:       string(session.Stage),
 		Draft:       session.Draft,
 		Prompt:      req.Prompt,

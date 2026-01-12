@@ -10,7 +10,11 @@ import (
 	"context"
 	"z-novel-ai-api/internal/application/quota"
 	"z-novel-ai-api/internal/application/retrieval"
-	"z-novel-ai-api/internal/application/story"
+	storyartifact "z-novel-ai-api/internal/application/story/artifact"
+	storychapter "z-novel-ai-api/internal/application/story/chapter"
+	storyctx "z-novel-ai-api/internal/application/story/context"
+	storyfoundation "z-novel-ai-api/internal/application/story/foundation"
+	storyprojectcreation "z-novel-ai-api/internal/application/story/projectcreation"
 	"z-novel-ai-api/internal/config"
 	"z-novel-ai-api/internal/domain/repository"
 	embedding2 "z-novel-ai-api/internal/infrastructure/embedding"
@@ -179,14 +183,14 @@ func InitializeApp(ctx context.Context, cfg *config.Config) (*router.Router, fun
 	txManager := postgres.NewTxManager(client)
 	tenantContext := postgres.NewTenantContext(client)
 	einoFactory := llm.NewEinoFactory(cfg)
-	foundationGenerator := story.NewFoundationGenerator(einoFactory)
-	foundationApplier := story.NewFoundationApplier(projectRepository, entityRepository, relationRepository, volumeRepository, chapterRepository)
+	foundationGenerator := storyfoundation.NewFoundationGenerator(einoFactory)
+	foundationApplier := storyfoundation.NewFoundationApplier(projectRepository, entityRepository, relationRepository, volumeRepository, chapterRepository)
 	foundationHandler := handler.NewFoundationHandler(cfg, txManager, tenantContext, tenantRepository, projectRepository, jobRepository, producer, tokenQuotaChecker, foundationGenerator, foundationApplier)
 	conversationSessionRepository := postgres.NewConversationSessionRepository(client)
 	conversationTurnRepository := postgres.NewConversationTurnRepository(client)
 	artifactRepository := postgres.NewArtifactRepository(client)
 	cache := redis.NewCache(redisClient)
-	rollingContextManager := story.NewRollingContextManager(cache)
+	rollingContextManager := storyctx.NewRollingContextManager(cache)
 	embedder, err := ProvideEmbedderOptional(ctx, cfg)
 	if err != nil {
 		cleanup2()
@@ -203,18 +207,18 @@ func InitializeApp(ctx context.Context, cfg *config.Config) (*router.Router, fun
 	repository := ProvideMilvusRepositoryOptional(milvusClient)
 	vectorRepository := ProvideRetrievalVectorRepositoryOptional(repository)
 	engine := ProvideRetrievalEngine(cfg, embedder, vectorRepository, entityRepository)
-	artifactGenerator := story.NewArtifactGenerator(einoFactory, engine)
+	artifactGenerator := storyartifact.NewArtifactGenerator(einoFactory, engine)
 	indexer := ProvideRetrievalIndexer(cfg, embedder, vectorRepository)
 	conversationHandler := handler.NewConversationHandler(cfg, txManager, tenantContext, tenantRepository, projectRepository, jobRepository, conversationSessionRepository, conversationTurnRepository, artifactRepository, rollingContextManager, tokenQuotaChecker, artifactGenerator, indexer)
 	projectCreationSessionRepository := postgres.NewProjectCreationSessionRepository(client)
 	projectCreationTurnRepository := postgres.NewProjectCreationTurnRepository(client)
 	llmUsageEventRepository := postgres.NewLLMUsageEventRepository(client)
-	projectCreationGenerator := story.NewProjectCreationGenerator(einoFactory)
+	projectCreationGenerator := storyprojectcreation.NewProjectCreationGenerator(einoFactory)
 	projectCreationHandler := handler.NewProjectCreationHandler(cfg, txManager, tenantContext, tenantRepository, projectRepository, conversationSessionRepository, projectCreationSessionRepository, projectCreationTurnRepository, jobRepository, llmUsageEventRepository, tokenQuotaChecker, projectCreationGenerator)
 	artifactHandler := handler.NewArtifactHandler(artifactRepository, indexer)
 	jobHandler := handler.NewJobHandler(jobRepository)
 	retrievalHandler := handler.NewRetrievalHandler(engine)
-	chapterGenerator := story.NewChapterGenerator(einoFactory)
+	chapterGenerator := storychapter.NewChapterGenerator(einoFactory)
 	streamHandler := handler.NewStreamHandler(cfg, chapterRepository, projectRepository, jobRepository, txManager, tenantContext, tokenQuotaChecker, chapterGenerator, indexer, engine)
 	userHandler := handler.NewUserHandler(userRepository)
 	tenantHandler := handler.NewTenantHandler(tenantRepository)
@@ -320,7 +324,7 @@ var PostgresSet = wire.NewSet(
 
 // RedisSet Redis 提供者集合
 var RedisSet = wire.NewSet(
-	ProvideRedisClient, redis.NewCache, redis.NewRateLimiter, wire.Bind(new(story.KVCache), new(*redis.Cache)), wire.Bind(new(middleware.RateLimiter), new(*redis.RateLimiter)),
+	ProvideRedisClient, redis.NewCache, redis.NewRateLimiter, wire.Bind(new(storyctx.KVCache), new(*redis.Cache)), wire.Bind(new(middleware.RateLimiter), new(*redis.RateLimiter)),
 )
 
 // MessagingSet 消息队列提供者集合
@@ -365,7 +369,7 @@ var GRPCClientsSet = wire.NewSet(
 
 // RouterSet 路由器提供者集合
 var RouterSet = wire.NewSet(
-	ProvideAuthConfig, llm.NewEinoFactory, story.NewChapterGenerator, story.NewFoundationGenerator, story.NewArtifactGenerator, quota.NewTokenQuotaChecker, story.NewFoundationApplier, story.NewProjectCreationGenerator, story.NewRollingContextManager, handler.NewAuthHandler, handler.NewHealthHandler, handler.NewProjectHandler, handler.NewVolumeHandler, handler.NewChapterHandler, handler.NewEntityHandler, handler.NewFoundationHandler, handler.NewConversationHandler, handler.NewProjectCreationHandler, handler.NewArtifactHandler, handler.NewJobHandler, handler.NewRetrievalHandler, handler.NewStreamHandler, handler.NewUserHandler, handler.NewTenantHandler, handler.NewEventHandler, handler.NewRelationHandler, wire.Struct(new(router.RouterHandlers), "*"), router.NewWithDeps,
+	ProvideAuthConfig, llm.NewEinoFactory, storychapter.NewChapterGenerator, storyfoundation.NewFoundationGenerator, storyartifact.NewArtifactGenerator, quota.NewTokenQuotaChecker, storyfoundation.NewFoundationApplier, storyprojectcreation.NewProjectCreationGenerator, storyctx.NewRollingContextManager, handler.NewAuthHandler, handler.NewHealthHandler, handler.NewProjectHandler, handler.NewVolumeHandler, handler.NewChapterHandler, handler.NewEntityHandler, handler.NewFoundationHandler, handler.NewConversationHandler, handler.NewProjectCreationHandler, handler.NewArtifactHandler, handler.NewJobHandler, handler.NewRetrievalHandler, handler.NewStreamHandler, handler.NewUserHandler, handler.NewTenantHandler, handler.NewEventHandler, handler.NewRelationHandler, wire.Struct(new(router.RouterHandlers), "*"), router.NewWithDeps,
 )
 
 // RepoSet 整合了具体实现与接口绑定的集合

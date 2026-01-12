@@ -1,7 +1,11 @@
 // Package dto 提供 HTTP 层数据传输对象
 package dto
 
-import "z-novel-ai-api/internal/application/story"
+import (
+	storyfoundation "z-novel-ai-api/internal/application/story/foundation"
+	storymodel "z-novel-ai-api/internal/application/story/model"
+	wfmodel "z-novel-ai-api/internal/workflow/model"
+)
 
 // FoundationTextAttachment 设定集生成的文本附件
 type FoundationTextAttachment struct {
@@ -21,17 +25,17 @@ type FoundationGenerateRequest struct {
 }
 
 // ToStoryInput 转换为应用层输入结构
-func (r *FoundationGenerateRequest) ToStoryInput(projectTitle, projectDescription string, provider, model string) *story.FoundationGenerateInput {
-	attachments := make([]story.TextAttachment, 0, len(r.Attachments))
+func (r *FoundationGenerateRequest) ToStoryInput(projectTitle, projectDescription string, provider, model string) *wfmodel.FoundationGenerateInput {
+	attachments := make([]wfmodel.TextAttachment, 0, len(r.Attachments))
 	for i := range r.Attachments {
 		a := r.Attachments[i]
-		attachments = append(attachments, story.TextAttachment{
+		attachments = append(attachments, wfmodel.TextAttachment{
 			Name:    a.Name,
 			Content: a.Content,
 		})
 	}
 
-	return &story.FoundationGenerateInput{
+	return &wfmodel.FoundationGenerateInput{
 		ProjectTitle:       projectTitle,
 		ProjectDescription: projectDescription,
 		Prompt:             r.Prompt,
@@ -56,20 +60,20 @@ type FoundationUsageResponse struct {
 
 // FoundationPreviewResponse 同步预览响应
 type FoundationPreviewResponse struct {
-	JobID string                   `json:"job_id,omitempty"`
-	Plan  *story.FoundationPlan    `json:"plan"`
-	Usage *FoundationUsageResponse `json:"usage,omitempty"`
+	JobID string                     `json:"job_id,omitempty"`
+	Plan  *storymodel.FoundationPlan `json:"plan"`
+	Usage *FoundationUsageResponse   `json:"usage,omitempty"`
 }
 
 // FoundationApplyRequest 应用 Plan（落库）请求
 // 约定：job_id 与 plan 二选一；优先使用 job_id（减少 payload 传输）。
 type FoundationApplyRequest struct {
-	JobID string                `json:"job_id,omitempty"`
-	Plan  *story.FoundationPlan `json:"plan,omitempty"`
+	JobID string                     `json:"job_id,omitempty"`
+	Plan  *storymodel.FoundationPlan `json:"plan,omitempty"`
 }
 
 // FoundationApplyResponse 应用 Plan（落库）响应
 type FoundationApplyResponse struct {
-	ProjectID string                       `json:"project_id"`
-	Result    *story.FoundationApplyResult `json:"result"`
+	ProjectID string                                 `json:"project_id"`
+	Result    *storyfoundation.FoundationApplyResult `json:"result"`
 }

@@ -1,4 +1,4 @@
-package story
+package artifact
 
 import (
 	"bytes"
@@ -9,9 +9,10 @@ import (
 	jsonpatch "github.com/evanphx/json-patch"
 
 	"z-novel-ai-api/internal/domain/entity"
+	wfmodel "z-novel-ai-api/internal/workflow/model"
 )
 
-func isArtifactJSONPatchEnabled(in *ArtifactGenerateInput) bool {
+func isArtifactJSONPatchEnabled(in *wfmodel.ArtifactGenerateInput) bool {
 	if in == nil {
 		return false
 	}

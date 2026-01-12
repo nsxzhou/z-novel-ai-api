@@ -1,10 +1,11 @@
-package story
+package foundation
 
 import (
 	"fmt"
 	"strings"
 	"unicode/utf8"
 
+	storymodel "z-novel-ai-api/internal/application/story/model"
 	"z-novel-ai-api/internal/domain/entity"
 )
 
@@ -20,7 +21,7 @@ func (e FoundationPlanValidationError) Error() string {
 }
 
 // ValidateFoundationPlan 对 FoundationPlan 做强约束校验，避免脏数据落库。
-func ValidateFoundationPlan(plan *FoundationPlan) error {
+func ValidateFoundationPlan(plan *storymodel.FoundationPlan) error {
 	var issues []string
 	if plan == nil {
 		return FoundationPlanValidationError{Issues: []string{"plan is nil"}}

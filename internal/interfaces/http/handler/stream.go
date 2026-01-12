@@ -14,12 +14,13 @@ import (
 
 	"z-novel-ai-api/internal/application/quota"
 	appretrieval "z-novel-ai-api/internal/application/retrieval"
-	"z-novel-ai-api/internal/application/story"
+	storychapter "z-novel-ai-api/internal/application/story/chapter"
 	"z-novel-ai-api/internal/config"
 	"z-novel-ai-api/internal/domain/entity"
 	"z-novel-ai-api/internal/domain/repository"
 	"z-novel-ai-api/internal/interfaces/http/dto"
 	"z-novel-ai-api/internal/interfaces/http/middleware"
+	wfmodel "z-novel-ai-api/internal/workflow/model"
 	"z-novel-ai-api/pkg/logger"
 
 	"github.com/gin-gonic/gin"
@@ -38,7 +39,7 @@ type StreamHandler struct {
 	tenantCtx repository.TenantContextManager
 
 	quotaChecker *quota.TokenQuotaChecker
-	generator    *story.ChapterGenerator
+	generator    *storychapter.ChapterGenerator
 	indexer      *appretrieval.Indexer
 	retrieval    *appretrieval.Engine
 }
@@ -52,7 +53,7 @@ func NewStreamHandler(
 	txMgr repository.Transactor,
 	tenantCtx repository.TenantContextManager,
 	quotaChecker *quota.TokenQuotaChecker,
-	generator *story.ChapterGenerator,
+	generator *storychapter.ChapterGenerator,
 	indexer *appretrieval.Indexer,
 	retrievalEngine *appretrieval.Engine,
 ) *StreamHandler {
@@ -216,7 +217,7 @@ func (h *StreamHandler) StreamChapter(c *gin.Context) {
 	c.Header("X-Accel-Buffering", "no")
 
 	contentCh := make(chan string, 16)
-	doneCh := make(chan *story.ChapterGenerateOutput, 1)
+	doneCh := make(chan *wfmodel.ChapterGenerateOutput, 1)
 	errCh := make(chan error, 1)
 
 	go func() {
@@ -242,7 +243,7 @@ func (h *StreamHandler) StreamChapter(c *gin.Context) {
 			}
 		}
 
-		reader, streamErr := h.generator.Stream(ctx, &story.ChapterGenerateInput{
+		reader, streamErr := h.generator.Stream(ctx, &wfmodel.ChapterGenerateInput{
 			ProjectTitle:       project.Title,
 			ProjectDescription: project.Description,
 			ChapterTitle:       chapter.Title,
@@ -263,7 +264,7 @@ func (h *StreamHandler) StreamChapter(c *gin.Context) {
 		defer reader.Close()
 
 		var raw strings.Builder
-		var usage *story.LLMUsageMeta
+		var usage *wfmodel.LLMUsageMeta
 
 		for {
 			msg, recvErr := reader.Recv()
@@ -283,7 +284,7 @@ func (h *StreamHandler) StreamChapter(c *gin.Context) {
 
 			if msg.ResponseMeta != nil && msg.ResponseMeta.Usage != nil {
 				u := msg.ResponseMeta.Usage
-				meta := story.LLMUsageMeta{
+				meta := wfmodel.LLMUsageMeta{
 					Provider:         provider,
 					Model:            model,
 					PromptTokens:     u.PromptTokens,
@@ -297,9 +298,9 @@ func (h *StreamHandler) StreamChapter(c *gin.Context) {
 			}
 		}
 
-		out := &story.ChapterGenerateOutput{
+		out := &wfmodel.ChapterGenerateOutput{
 			Content: strings.TrimSpace(raw.String()),
-			Meta: story.LLMUsageMeta{
+			Meta: wfmodel.LLMUsageMeta{
 				Provider:    provider,
 				Model:       model,
 				GeneratedAt: time.Now().UTC(),
@@ -459,7 +460,7 @@ func (h *StreamHandler) markJobFailed(ctx context.Context, tenantID, jobID, chap
 	})
 }
 
-func (h *StreamHandler) markJobCompleted(ctx context.Context, tenantID, jobID, chapterID string, out *story.ChapterGenerateOutput, durationMs int) error {
+func (h *StreamHandler) markJobCompleted(ctx context.Context, tenantID, jobID, chapterID string, out *wfmodel.ChapterGenerateOutput, durationMs int) error {
 	if out == nil {
 		return fmt.Errorf("chapter output is nil")
 	}

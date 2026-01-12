@@ -1,4 +1,4 @@
-package story
+package artifact
 
 import (
 	"encoding/json"
@@ -6,6 +6,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	storymodel "z-novel-ai-api/internal/application/story/model"
 	"z-novel-ai-api/internal/domain/entity"
 )
 
@@ -26,12 +27,12 @@ type WorldviewArtifact struct {
 }
 
 type CharactersArtifact struct {
-	Entities  []EntityPlan   `json:"entities"`
-	Relations []RelationPlan `json:"relations"`
+	Entities  []storymodel.EntityPlan   `json:"entities"`
+	Relations []storymodel.RelationPlan `json:"relations"`
 }
 
 type OutlineArtifact struct {
-	Volumes []VolumePlan `json:"volumes"`
+	Volumes []storymodel.VolumePlan `json:"volumes"`
 }
 
 type ArtifactValidationError struct {
@@ -138,7 +139,7 @@ func ValidateWorldviewArtifact(a *WorldviewArtifact) error {
 	if utf8.RuneCountInString(a.Genre) > 64 {
 		issues = append(issues, "genre too long")
 	}
-	if isEmptyWorldSettings(a.WorldSettings) {
+	if storymodel.IsEmptyWorldSettings(a.WorldSettings) {
 		issues = append(issues, "world_settings is required")
 	}
 	if len(issues) > 0 {
@@ -304,4 +305,45 @@ func ValidateOutlineArtifact(a *OutlineArtifact) error {
 		return ArtifactValidationError{Type: entity.ArtifactTypeOutline, Issues: issues}
 	}
 	return nil
+}
+
+func isValidEntityType(t entity.StoryEntityType) bool {
+	switch t {
+	case entity.EntityTypeCharacter,
+		entity.EntityTypeItem,
+		entity.EntityTypeLocation,
+		entity.EntityTypeOrganization,
+		entity.EntityTypeConcept:
+		return true
+	default:
+		return false
+	}
+}
+
+func isValidEntityImportance(i entity.EntityImportance) bool {
+	switch i {
+	case entity.ImportanceProtagonist,
+		entity.ImportanceMajor,
+		entity.ImportanceSecondary,
+		entity.ImportanceMinor:
+		return true
+	default:
+		return false
+	}
+}
+
+func isValidRelationType(t entity.RelationType) bool {
+	switch t {
+	case entity.RelationTypeFriend,
+		entity.RelationTypeEnemy,
+		entity.RelationTypeFamily,
+		entity.RelationTypeLover,
+		entity.RelationTypeSubordinate,
+		entity.RelationTypeMentor,
+		entity.RelationTypeRival,
+		entity.RelationTypeAlly:
+		return true
+	default:
+		return false
+	}
 }

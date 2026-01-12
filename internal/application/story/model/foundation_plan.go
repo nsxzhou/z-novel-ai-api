@@ -1,5 +1,5 @@
-// Package story 提供小说生成相关应用层能力
-package story
+// Package model 提供 story 应用层的稳定 DTO/结构定义（可被多个子包复用）。
+package model
 
 import "z-novel-ai-api/internal/domain/entity"
 

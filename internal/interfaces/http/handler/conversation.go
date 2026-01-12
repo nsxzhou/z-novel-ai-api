@@ -14,12 +14,14 @@ import (
 
 	"z-novel-ai-api/internal/application/quota"
 	appretrieval "z-novel-ai-api/internal/application/retrieval"
-	"z-novel-ai-api/internal/application/story"
+	storyartifact "z-novel-ai-api/internal/application/story/artifact"
+	storyctx "z-novel-ai-api/internal/application/story/context"
 	"z-novel-ai-api/internal/config"
 	"z-novel-ai-api/internal/domain/entity"
 	"z-novel-ai-api/internal/domain/repository"
 	"z-novel-ai-api/internal/interfaces/http/dto"
 	"z-novel-ai-api/internal/interfaces/http/middleware"
+	wfmodel "z-novel-ai-api/internal/workflow/model"
 	"z-novel-ai-api/pkg/logger"
 
 	"github.com/gin-gonic/gin"
@@ -40,9 +42,9 @@ type ConversationHandler struct {
 	turnRepo     repository.ConversationTurnRepository
 	artifactRepo repository.ArtifactRepository
 
-	rollingCtx   *story.RollingContextManager
+	rollingCtx   *storyctx.RollingContextManager
 	quotaChecker *quota.TokenQuotaChecker
-	generator    *story.ArtifactGenerator
+	generator    *storyartifact.ArtifactGenerator
 	indexer      *appretrieval.Indexer
 }
 
@@ -56,9 +58,9 @@ func NewConversationHandler(
 	sessionRepo repository.ConversationSessionRepository,
 	turnRepo repository.ConversationTurnRepository,
 	artifactRepo repository.ArtifactRepository,
-	rollingCtx *story.RollingContextManager,
+	rollingCtx *storyctx.RollingContextManager,
 	quotaChecker *quota.TokenQuotaChecker,
-	generator *story.ArtifactGenerator,
+	generator *storyartifact.ArtifactGenerator,
 	indexer *appretrieval.Indexer,
 ) *ConversationHandler {
 	return &ConversationHandler{
@@ -468,7 +470,7 @@ func (h *ConversationHandler) SendMessage(c *gin.Context) {
 	}
 
 	start := time.Now()
-	out, genErr := h.generator.Generate(ctx, &story.ArtifactGenerateInput{
+	out, genErr := h.generator.Generate(ctx, &wfmodel.ArtifactGenerateInput{
 		TenantID:            tenantID,
 		ProjectID:           projectID,
 		ProjectTitle:        project.Title,
@@ -498,7 +500,7 @@ func (h *ConversationHandler) SendMessage(c *gin.Context) {
 
 	var conflictWarnings []*dto.SettingConflictWarning
 	if enableConflictScan && hasAnyArtifactContext(project, currentWorldview, currentCharacters, currentOutline, currentArtifact) {
-		scanOut, scanErr := h.generator.ScanConflicts(ctx, &story.ArtifactConflictScanInput{
+		scanOut, scanErr := h.generator.ScanConflicts(ctx, &wfmodel.ArtifactConflictScanInput{
 			ProjectTitle:       project.Title,
 			ProjectDescription: project.Description,
 			ProjectGenre:       project.Genre,

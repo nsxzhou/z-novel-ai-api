@@ -1,10 +1,11 @@
-package story
+package foundation
 
 import (
 	"context"
 	"fmt"
 	"strings"
 
+	storymodel "z-novel-ai-api/internal/application/story/model"
 	"z-novel-ai-api/internal/domain/entity"
 	"z-novel-ai-api/internal/domain/repository"
 )
@@ -51,7 +52,7 @@ func NewFoundationApplier(
 // 约定：
 // - 调用方负责事务边界（HTTP: DBTransaction 中间件；Worker: txMgr.WithTransaction + tenantCtx.SetTenant）。
 // - 默认“追加/幂等”，不做破坏性删除。
-func (a *FoundationApplier) Apply(ctx context.Context, projectID string, plan *FoundationPlan) (*FoundationApplyResult, error) {
+func (a *FoundationApplier) Apply(ctx context.Context, projectID string, plan *storymodel.FoundationPlan) (*FoundationApplyResult, error) {
 	if a == nil {
 		return nil, fmt.Errorf("foundation applier not configured")
 	}
@@ -180,7 +181,7 @@ func (a *FoundationApplier) Apply(ctx context.Context, projectID string, plan *F
 	return result, nil
 }
 
-func applyProjectPlan(p *entity.Project, plan *ProjectPlan) (changed bool) {
+func applyProjectPlan(p *entity.Project, plan *storymodel.ProjectPlan) (changed bool) {
 	if p == nil || plan == nil {
 		return false
 	}
@@ -216,7 +217,7 @@ func applyProjectPlan(p *entity.Project, plan *ProjectPlan) (changed bool) {
 		changed = true
 	}
 	// world_settings 一期按“整体覆盖”处理（Plan 强约束字段）；后续可细化为 merge。
-	if !isEmptyWorldSettings(plan.WorldSettings) {
+	if !storymodel.IsEmptyWorldSettings(plan.WorldSettings) {
 		*p.WorldSettings = plan.WorldSettings
 		changed = true
 	}
@@ -232,16 +233,6 @@ func applyProjectPlan(p *entity.Project, plan *ProjectPlan) (changed bool) {
 	return changed
 }
 
-func isEmptyWorldSettings(ws entity.WorldSettings) bool {
-	if strings.TrimSpace(ws.TimeSystem) != "" {
-		return false
-	}
-	if strings.TrimSpace(ws.Calendar) != "" {
-		return false
-	}
-	return len(ws.Locations) == 0
-}
-
 func upsertWorldBibleIntoDescription(description, worldBible string) string {
 	if strings.TrimSpace(worldBible) == "" {
 		return description
@@ -255,7 +246,7 @@ func upsertWorldBibleIntoDescription(description, worldBible string) string {
 	return strings.TrimRight(description, "\n") + "\n\n---\n\n世界观设定：\n" + worldBible
 }
 
-func (a *FoundationApplier) upsertEntity(ctx context.Context, projectID string, p *EntityPlan) (*entity.StoryEntity, bool, bool, error) {
+func (a *FoundationApplier) upsertEntity(ctx context.Context, projectID string, p *storymodel.EntityPlan) (*entity.StoryEntity, bool, bool, error) {
 	if p == nil {
 		return nil, false, false, nil
 	}
@@ -339,7 +330,7 @@ func (a *FoundationApplier) upsertEntity(ctx context.Context, projectID string, 
 	return existing, false, updated, nil
 }
 
-func (a *FoundationApplier) upsertRelation(ctx context.Context, projectID, sourceID, targetID string, p *RelationPlan) (bool, bool, error) {
+func (a *FoundationApplier) upsertRelation(ctx context.Context, projectID, sourceID, targetID string, p *storymodel.RelationPlan) (bool, bool, error) {
 	if p == nil {
 		return false, false, nil
 	}
@@ -386,7 +377,7 @@ func (a *FoundationApplier) upsertRelation(ctx context.Context, projectID, sourc
 	return false, updated, nil
 }
 
-func (a *FoundationApplier) upsertVolume(ctx context.Context, projectID string, nextSeq *int, p *VolumePlan) (*entity.Volume, bool, bool, error) {
+func (a *FoundationApplier) upsertVolume(ctx context.Context, projectID string, nextSeq *int, p *storymodel.VolumePlan) (*entity.Volume, bool, bool, error) {
 	if p == nil {
 		return nil, false, false, nil
 	}
@@ -441,7 +432,7 @@ func (a *FoundationApplier) upsertVolume(ctx context.Context, projectID string, 
 	return existing, false, updated, nil
 }
 
-func (a *FoundationApplier) upsertChapter(ctx context.Context, projectID, volumeID string, nextSeq *int, p *ChapterPlan) (*entity.Chapter, bool, bool, error) {
+func (a *FoundationApplier) upsertChapter(ctx context.Context, projectID, volumeID string, nextSeq *int, p *storymodel.ChapterPlan) (*entity.Chapter, bool, bool, error) {
 	if p == nil {
 		return nil, false, false, nil
 	}

@@ -7,7 +7,7 @@ import (
 	"time"
 
 	appretrieval "z-novel-ai-api/internal/application/retrieval"
-	"z-novel-ai-api/internal/application/story"
+	storyartifact "z-novel-ai-api/internal/application/story/artifact"
 	"z-novel-ai-api/internal/domain/repository"
 	"z-novel-ai-api/internal/interfaces/http/dto"
 	"z-novel-ai-api/internal/interfaces/http/middleware"
@@ -218,7 +218,7 @@ func (h *ArtifactHandler) CompareVersions(c *gin.Context) {
 		return
 	}
 
-	diff, err := story.CompareArtifactContent(art.Type, fromV.Content, toV.Content)
+	diff, err := storyartifact.CompareArtifactContent(art.Type, fromV.Content, toV.Content)
 	if err != nil {
 		logger.Error(ctx, "failed to compare artifact content", err)
 		dto.InternalError(c, "failed to compare versions")

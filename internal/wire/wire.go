@@ -12,7 +12,11 @@ import (
 
 	"z-novel-ai-api/internal/application/quota"
 	"z-novel-ai-api/internal/application/retrieval"
-	"z-novel-ai-api/internal/application/story"
+	storyartifact "z-novel-ai-api/internal/application/story/artifact"
+	storychapter "z-novel-ai-api/internal/application/story/chapter"
+	storyctx "z-novel-ai-api/internal/application/story/context"
+	storyfoundation "z-novel-ai-api/internal/application/story/foundation"
+	storyprojectcreation "z-novel-ai-api/internal/application/story/projectcreation"
 	"z-novel-ai-api/internal/config"
 	"z-novel-ai-api/internal/domain/repository"
 	infraembedding "z-novel-ai-api/internal/infrastructure/embedding"
@@ -146,7 +150,7 @@ var RedisSet = wire.NewSet(
 	ProvideRedisClient,
 	redis.NewCache,
 	redis.NewRateLimiter,
-	wire.Bind(new(story.KVCache), new(*redis.Cache)),
+	wire.Bind(new(storyctx.KVCache), new(*redis.Cache)),
 	wire.Bind(new(middleware.RateLimiter), new(*redis.RateLimiter)),
 )
 
@@ -195,13 +199,13 @@ var GRPCClientsSet = wire.NewSet(
 var RouterSet = wire.NewSet(
 	ProvideAuthConfig,
 	llm.NewEinoFactory,
-	story.NewChapterGenerator,
-	story.NewFoundationGenerator,
-	story.NewArtifactGenerator,
+	storychapter.NewChapterGenerator,
+	storyfoundation.NewFoundationGenerator,
+	storyartifact.NewArtifactGenerator,
 	quota.NewTokenQuotaChecker,
-	story.NewFoundationApplier,
-	story.NewProjectCreationGenerator,
-	story.NewRollingContextManager,
+	storyfoundation.NewFoundationApplier,
+	storyprojectcreation.NewProjectCreationGenerator,
+	storyctx.NewRollingContextManager,
 	handler.NewAuthHandler,
 	handler.NewHealthHandler,
 	handler.NewProjectHandler,

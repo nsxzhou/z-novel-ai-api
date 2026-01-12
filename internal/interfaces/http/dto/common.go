@@ -2,7 +2,7 @@
 package dto
 
 import (
-	"z-novel-ai-api/internal/application/story"
+	wfmodel "z-novel-ai-api/internal/workflow/model"
 )
 
 // ConversationMessageRequest 通用对话消息请求
@@ -16,14 +16,14 @@ type ConversationMessageRequest struct {
 	MaxTokens   *int     `json:"max_tokens,omitempty"`
 }
 
-func (r *ConversationMessageRequest) ToStoryAttachments() []story.TextAttachment {
+func (r *ConversationMessageRequest) ToStoryAttachments() []wfmodel.TextAttachment {
 	if r == nil {
 		return nil
 	}
-	out := make([]story.TextAttachment, 0, len(r.Attachments))
+	out := make([]wfmodel.TextAttachment, 0, len(r.Attachments))
 	for i := range r.Attachments {
 		a := r.Attachments[i]
-		out = append(out, story.TextAttachment{
+		out = append(out, wfmodel.TextAttachment{
 			Name:    a.Name,
 			Content: a.Content,
 		})

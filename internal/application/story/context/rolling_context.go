@@ -1,8 +1,9 @@
-package story
+package context
 
 import (
 	"fmt"
 	"strings"
+	"z-novel-ai-api/internal/application/story/storyutil"
 )
 
 const (
@@ -39,7 +40,7 @@ func (c *RollingConversationContext) AppendUserPrompt(prompt string) {
 	if p == "" {
 		return
 	}
-	p = truncateByRunes(p, rollingContextTurnMaxRunes)
+	p = storyutil.TruncateByRunes(p, rollingContextTurnMaxRunes)
 
 	c.UserTurnCount++
 	c.RecentUserTurns = append(c.RecentUserTurns, p)
@@ -68,7 +69,7 @@ func (c *RollingConversationContext) compact() {
 	c.RecentUserTurns = c.RecentUserTurns[len(c.RecentUserTurns)-rollingContextRecentKeep:]
 
 	c.Summary = appendToSummary(c.Summary, older)
-	c.Summary = truncateByRunes(c.Summary, rollingContextSummaryMaxRunes)
+	c.Summary = storyutil.TruncateByRunes(c.Summary, rollingContextSummaryMaxRunes)
 }
 
 func formatRecentUserTurns(turns []string) string {

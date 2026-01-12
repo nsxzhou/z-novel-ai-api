@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"z-novel-ai-api/internal/application/story"
+	storyartifact "z-novel-ai-api/internal/application/story/artifact"
 	"z-novel-ai-api/internal/domain/entity"
 )
 
@@ -93,9 +93,9 @@ type ArtifactBranchListResponse struct {
 }
 
 type ArtifactCompareResponse struct {
-	ArtifactID string                     `json:"artifact_id"`
-	Type       string                     `json:"type"`
-	From       *ArtifactVersionResponse   `json:"from"`
-	To         *ArtifactVersionResponse   `json:"to"`
-	Diff       *story.ArtifactCompareDiff `json:"diff,omitempty"`
+	ArtifactID string                             `json:"artifact_id"`
+	Type       string                             `json:"type"`
+	From       *ArtifactVersionResponse           `json:"from"`
+	To         *ArtifactVersionResponse           `json:"to"`
+	Diff       *storyartifact.ArtifactCompareDiff `json:"diff,omitempty"`
 }

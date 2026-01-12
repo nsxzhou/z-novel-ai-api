@@ -12,13 +12,15 @@ import (
 	"time"
 
 	"z-novel-ai-api/internal/application/quota"
-	"z-novel-ai-api/internal/application/story"
+	storyfoundation "z-novel-ai-api/internal/application/story/foundation"
+	storymodel "z-novel-ai-api/internal/application/story/model"
 	"z-novel-ai-api/internal/config"
 	"z-novel-ai-api/internal/domain/entity"
 	"z-novel-ai-api/internal/domain/repository"
 	"z-novel-ai-api/internal/infrastructure/messaging"
 	"z-novel-ai-api/internal/interfaces/http/dto"
 	"z-novel-ai-api/internal/interfaces/http/middleware"
+	wfmodel "z-novel-ai-api/internal/workflow/model"
 	"z-novel-ai-api/pkg/logger"
 
 	"github.com/gin-gonic/gin"
@@ -39,8 +41,8 @@ type FoundationHandler struct {
 	producer *messaging.Producer
 
 	quotaChecker *quota.TokenQuotaChecker
-	generator    *story.FoundationGenerator
-	applier      *story.FoundationApplier
+	generator    *storyfoundation.FoundationGenerator
+	applier      *storyfoundation.FoundationApplier
 }
 
 type applyPlanResolveErrorCode string
@@ -70,8 +72,8 @@ func NewFoundationHandler(
 	jobRepo repository.JobRepository,
 	producer *messaging.Producer,
 	quotaChecker *quota.TokenQuotaChecker,
-	generator *story.FoundationGenerator,
-	applier *story.FoundationApplier,
+	generator *storyfoundation.FoundationGenerator,
+	applier *storyfoundation.FoundationApplier,
 ) *FoundationHandler {
 	return &FoundationHandler{
 		cfg:          cfg,
@@ -187,7 +189,7 @@ func (h *FoundationHandler) PreviewFoundation(c *gin.Context) {
 		return
 	}
 
-	if err := story.ValidateFoundationPlan(out.Plan); err != nil {
+	if err := storyfoundation.ValidateFoundationPlan(out.Plan); err != nil {
 		_ = h.markJobFailed(ctx, tenantID, jobID, err, durationMs)
 		h.writePlanValidationError(c, err)
 		return
@@ -313,7 +315,7 @@ func (h *FoundationHandler) StreamFoundation(c *gin.Context) {
 	c.Header("X-Accel-Buffering", "no")
 
 	contentCh := make(chan string, 16)
-	doneCh := make(chan *story.FoundationGenerateOutput, 1)
+	doneCh := make(chan *storyfoundation.FoundationGenerateOutput, 1)
 	errCh := make(chan error, 1)
 
 	go func() {
@@ -331,7 +333,7 @@ func (h *FoundationHandler) StreamFoundation(c *gin.Context) {
 		defer reader.Close()
 
 		var raw strings.Builder
-		var usage *story.LLMUsageMeta
+		var usage *wfmodel.LLMUsageMeta
 
 		for {
 			msg, recvErr := reader.Recv()
@@ -351,7 +353,7 @@ func (h *FoundationHandler) StreamFoundation(c *gin.Context) {
 
 			if msg.ResponseMeta != nil && msg.ResponseMeta.Usage != nil {
 				u := msg.ResponseMeta.Usage
-				meta := story.LLMUsageMeta{
+				meta := wfmodel.LLMUsageMeta{
 					Provider:         provider,
 					Model:            model,
 					PromptTokens:     u.PromptTokens,
@@ -365,23 +367,23 @@ func (h *FoundationHandler) StreamFoundation(c *gin.Context) {
 			}
 		}
 
-		plan, jsonText, parseErr := story.ParseFoundationPlan(raw.String())
+		plan, jsonText, parseErr := storyfoundation.ParseFoundationPlan(raw.String())
 		if parseErr != nil {
 			errCh <- parseErr
 			_ = h.markJobFailed(ctx, tenantID, jobID, parseErr, int(time.Since(start).Milliseconds()))
 			return
 		}
 
-		if err := story.ValidateFoundationPlan(plan); err != nil {
+		if err := storyfoundation.ValidateFoundationPlan(plan); err != nil {
 			errCh <- err
 			_ = h.markJobFailed(ctx, tenantID, jobID, err, int(time.Since(start).Milliseconds()))
 			return
 		}
 
-		out := &story.FoundationGenerateOutput{
+		out := &storyfoundation.FoundationGenerateOutput{
 			Plan: plan,
 			Raw:  jsonText,
-			Meta: story.LLMUsageMeta{
+			Meta: wfmodel.LLMUsageMeta{
 				Provider:    provider,
 				Model:       model,
 				GeneratedAt: time.Now().UTC(),
@@ -606,7 +608,7 @@ func (h *FoundationHandler) ApplyFoundation(c *gin.Context) {
 		return
 	}
 
-	if err := story.ValidateFoundationPlan(plan); err != nil {
+	if err := storyfoundation.ValidateFoundationPlan(plan); err != nil {
 		h.writePlanValidationError(c, err)
 		return
 	}
@@ -639,7 +641,7 @@ func (h *FoundationHandler) writeQuotaError(c *gin.Context, err error) {
 }
 
 func (h *FoundationHandler) writePlanValidationError(c *gin.Context, err error) {
-	var ve story.FoundationPlanValidationError
+	var ve storyfoundation.FoundationPlanValidationError
 	if errors.As(err, &ve) {
 		dto.UnprocessableEntity(c, "invalid foundation plan", &dto.ErrorDetail{
 			ErrorCode: "foundation_plan_invalid",
@@ -691,7 +693,7 @@ func (h *FoundationHandler) markJobFailed(ctx context.Context, tenantID, jobID s
 	})
 }
 
-func (h *FoundationHandler) markJobCompleted(ctx context.Context, tenantID, jobID string, out *story.FoundationGenerateOutput, durationMs int) error {
+func (h *FoundationHandler) markJobCompleted(ctx context.Context, tenantID, jobID string, out *storyfoundation.FoundationGenerateOutput, durationMs int) error {
 	return withTenantTx(ctx, h.txMgr, h.tenantCtx, tenantID, func(txCtx context.Context) error {
 		job, err := h.jobRepo.GetByID(txCtx, jobID)
 		if err != nil || job == nil {
@@ -708,7 +710,7 @@ func (h *FoundationHandler) markJobCompleted(ctx context.Context, tenantID, jobI
 	})
 }
 
-func (h *FoundationHandler) resolveApplyPlan(ctx context.Context, projectID string, req *dto.FoundationApplyRequest) (*story.FoundationPlan, error) {
+func (h *FoundationHandler) resolveApplyPlan(ctx context.Context, projectID string, req *dto.FoundationApplyRequest) (*storymodel.FoundationPlan, error) {
 	if req == nil {
 		return nil, applyPlanResolveError{code: applyPlanResolveErrorInvalidRequest, msg: "empty request"}
 	}
@@ -730,7 +732,7 @@ func (h *FoundationHandler) resolveApplyPlan(ctx context.Context, projectID stri
 			return nil, applyPlanResolveError{code: applyPlanResolveErrorJobNotCompleted, msg: "job not completed"}
 		}
 
-		var plan story.FoundationPlan
+		var plan storymodel.FoundationPlan
 		if err := json.Unmarshal(job.OutputResult, &plan); err != nil {
 			return nil, fmt.Errorf("failed to parse job result plan: %w", err)
 		}
