@@ -35,7 +35,7 @@
 
 - **主要入口:**
   - HTTP Handler: `internal/interfaces/http/handler/project_creation.go`
-  - Generator: `internal/application/story/project_creation_generator.go`
+  - Generator: `internal/application/story/projectcreation/generator.go`
   - Entity: `internal/domain/entity/project_creation.go`
 - **HTTP API:**
   - `POST /v1/project-creation-sessions`：创建孵化会话
@@ -53,7 +53,7 @@
 
 - **主要入口:**
   - HTTP Handler: `internal/interfaces/http/handler/conversation.go`、`internal/interfaces/http/handler/artifact.go`
-  - Generator: `internal/application/story/artifact_generator.go`
+  - Generator: `internal/application/story/artifact/generator.go`
 - **HTTP API:**
   - `POST /v1/projects/:pid/sessions`：创建长期会话
   - `POST /v1/projects/:pid/sessions/:sid/messages`：发送任务指令
@@ -75,7 +75,7 @@
 - **主要入口:**
   - HTTP Handler: `internal/interfaces/http/handler/foundation.go`
   - DTO: `internal/interfaces/http/dto/foundation.go`
-  - Plan/Generate/Validate/Apply: `internal/application/story/foundation_*.go`
+  - Plan/Generate/Validate/Apply: `internal/application/story/foundation/*`、`internal/application/story/model/*`
 - **HTTP API:**
   - `POST /v1/projects/:pid/foundation/preview`
   - `GET|POST /v1/projects/:pid/foundation/stream`
@@ -91,7 +91,7 @@
 - Artifact：Graph + ToolCalling（ReAct 回路）按需获取上下文 + 校验失败修复回路（Validate → Repair → Re-run）
 - 增量 Patch 模式（JSON Patch）：支持 `novel_foundation/worldview/characters/outline`；服务端应用 patch 后仍输出完整 JSON
 - 上下文滚动摘要（Redis）：长会话自动压缩历史（summary + recent turns）并注入 Prompt，降低 token 成本
-- 可观测性：Eino 全局 callbacks + Prometheus 指标：`internal/observability/eino/*`
+- 可观测性：Eino 全局 callbacks + Prometheus 指标：`internal/infrastructure/eino/callback/*`
 - 安全：ProjectCreation 增加服务端“确定性确认门控”，避免模型幻觉触发误创建
 
 #### 1.2.5 章节生成闭环（Async / SSE）
@@ -100,7 +100,7 @@
 
 - **主要入口:**
   - HTTP Handler: `internal/interfaces/http/handler/chapter.go`、`internal/interfaces/http/handler/stream.go`
-  - Generator: `internal/application/story/chapter_generator.go`
+  - Generator: `internal/application/story/chapter/generator.go`
   - Prompt: `internal/workflow/prompt/templates/chapter_gen_v1.*.txt`
   - Worker: `cmd/job-worker/main.go`（Redis Streams `chapter_gen`）
 - **HTTP API:**
