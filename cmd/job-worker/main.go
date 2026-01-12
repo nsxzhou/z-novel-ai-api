@@ -16,7 +16,8 @@ import (
 
 	"z-novel-ai-api/internal/application/quota"
 	appretrieval "z-novel-ai-api/internal/application/retrieval"
-	"z-novel-ai-api/internal/application/story"
+	storychapter "z-novel-ai-api/internal/application/story/chapter"
+	storyfoundation "z-novel-ai-api/internal/application/story/foundation"
 	"z-novel-ai-api/internal/config"
 	"z-novel-ai-api/internal/domain/entity"
 	infraembedding "z-novel-ai-api/internal/infrastructure/embedding"
@@ -25,9 +26,11 @@ import (
 	"z-novel-ai-api/internal/infrastructure/persistence/milvus"
 	"z-novel-ai-api/internal/infrastructure/persistence/postgres"
 	"z-novel-ai-api/internal/infrastructure/persistence/redis"
-	einoobs "z-novel-ai-api/internal/observability/eino"
+	wfmodel "z-novel-ai-api/internal/workflow/model"
 	"z-novel-ai-api/pkg/logger"
 	"z-novel-ai-api/pkg/tracer"
+
+	einocallback "z-novel-ai-api/internal/infrastructure/eino/callback"
 )
 
 func main() {
@@ -99,12 +102,12 @@ func main() {
 	llmUsageRepo := postgres.NewLLMUsageEventRepository(pgClient)
 
 	// 3. 初始化 Eino 全局 callbacks（搬移到这里以确保 Repo 变量已定义）
-	einoobs.Init(tenantRepo, llmUsageRepo, tenantCtx)
+	einocallback.Init(quota.NewLLMUsageRecorder(tenantRepo, llmUsageRepo), tenantCtx)
 
 	// 4. 初始化应用逻辑
 	llmFactory := llm.NewEinoFactory(cfg)
-	foundationGenerator := story.NewFoundationGenerator(llmFactory)
-	chapterGenerator := story.NewChapterGenerator(llmFactory)
+	foundationGenerator := storyfoundation.NewFoundationGenerator(llmFactory)
+	chapterGenerator := storychapter.NewChapterGenerator(llmFactory)
 	tokenQuotaChecker := quota.NewTokenQuotaChecker(tenantRepo)
 
 	// 5. 初始化消息消费者
@@ -370,7 +373,7 @@ func main() {
 				_ = jobRepo.Update(txCtx, job)
 				return err
 			}
-			if err := story.ValidateFoundationPlan(out.Plan); err != nil {
+			if err := storyfoundation.ValidateFoundationPlan(out.Plan); err != nil {
 				job.Fail(err.Error())
 				_ = jobRepo.Update(txCtx, job)
 				return nil
@@ -406,7 +409,7 @@ func hostnameConsumerName() string {
 	return fmt.Sprintf("%s-%d", host, os.Getpid())
 }
 
-func buildFoundationInput(project *entity.Project, params map[string]interface{}) (*story.FoundationGenerateInput, error) {
+func buildFoundationInput(project *entity.Project, params map[string]interface{}) (*wfmodel.FoundationGenerateInput, error) {
 	if project == nil {
 		return nil, fmt.Errorf("project is nil")
 	}
@@ -432,7 +435,7 @@ func buildFoundationInput(project *entity.Project, params map[string]interface{}
 		maxTokens = &i
 	}
 
-	attachments := make([]story.TextAttachment, 0)
+	attachments := make([]wfmodel.TextAttachment, 0)
 	if raw, ok := params["attachments"].([]interface{}); ok {
 		for _, item := range raw {
 			m, ok := item.(map[string]interface{})
@@ -444,14 +447,14 @@ func buildFoundationInput(project *entity.Project, params map[string]interface{}
 			if strings.TrimSpace(content) == "" {
 				continue
 			}
-			attachments = append(attachments, story.TextAttachment{
+			attachments = append(attachments, wfmodel.TextAttachment{
 				Name:    name,
 				Content: content,
 			})
 		}
 	}
 
-	return &story.FoundationGenerateInput{
+	return &wfmodel.FoundationGenerateInput{
 		ProjectTitle:       project.Title,
 		ProjectDescription: project.Description,
 		Prompt:             prompt,
@@ -463,7 +466,7 @@ func buildFoundationInput(project *entity.Project, params map[string]interface{}
 	}, nil
 }
 
-func buildChapterInput(cfg *config.Config, project *entity.Project, chapter *entity.Chapter, params map[string]interface{}) (*story.ChapterGenerateInput, error) {
+func buildChapterInput(cfg *config.Config, project *entity.Project, chapter *entity.Chapter, params map[string]interface{}) (*wfmodel.ChapterGenerateInput, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config is nil")
 	}
@@ -518,7 +521,7 @@ func buildChapterInput(cfg *config.Config, project *entity.Project, chapter *ent
 		pov = strings.TrimSpace(project.Settings.POV)
 	}
 
-	return &story.ChapterGenerateInput{
+	return &wfmodel.ChapterGenerateInput{
 		ProjectTitle:       project.Title,
 		ProjectDescription: project.Description,
 		ChapterTitle:       chapter.Title,

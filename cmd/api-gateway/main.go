@@ -10,8 +10,9 @@ import (
 	"syscall"
 	"time"
 
+	"z-novel-ai-api/internal/application/quota"
 	"z-novel-ai-api/internal/config"
-	einoobs "z-novel-ai-api/internal/observability/eino"
+	einocallback "z-novel-ai-api/internal/infrastructure/eino/callback"
 	"z-novel-ai-api/internal/wire"
 	"z-novel-ai-api/pkg/logger"
 	"z-novel-ai-api/pkg/tracer"
@@ -76,7 +77,14 @@ func main() {
 
 	// 初始化 Eino 全局 callbacks（指标/追踪/日志/自动化扣费）
 	// 注意：这里需要注入 Repo 以实现自动扣费
-	einoobs.Init(app.Handlers.TenantRepo, app.Handlers.LLMUsageRepo, app.Handlers.TenantContext)
+	usageRecorder := quota.NewLLMUsageRecorder(app.Handlers.TenantRepo, app.Handlers.LLMUsageRepo)
+	var tenantGetter einocallback.TenantIDGetter
+	if g, ok := app.Handlers.TenantContext.(interface {
+		GetCurrentTenant(ctx context.Context) (string, error)
+	}); ok {
+		tenantGetter = g
+	}
+	einocallback.Init(usageRecorder, tenantGetter)
 
 	// 获取引擎
 	r := app.Engine()
