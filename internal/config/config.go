@@ -19,7 +19,8 @@ type Config struct {
 	Messaging     MessagingConfig     `yaml:"messaging" mapstructure:"messaging"`
 	Observability ObservabilityConfig `yaml:"observability" mapstructure:"observability"`
 	Security      SecurityConfig      `yaml:"security" mapstructure:"security"`
-	Features      FeaturesConfig      `yaml:"features" mapstructure:"features"`
+
+	// 注意：历史上的 features.* 功能开关为“占位配置”，容易造成“开关可用/已生效”的误解，已移除。
 }
 
 // AppConfig 应用基础配置
@@ -246,28 +247,4 @@ type CORSConfig struct {
 	AllowedOrigins []string `yaml:"allowed_origins" mapstructure:"allowed_origins"`
 	AllowedMethods []string `yaml:"allowed_methods" mapstructure:"allowed_methods"`
 	AllowedHeaders []string `yaml:"allowed_headers" mapstructure:"allowed_headers"`
-}
-
-// FeaturesConfig 功能开关配置
-type FeaturesConfig struct {
-	Validation      ValidationFeature      `yaml:"validation" mapstructure:"validation"`
-	MemoryWriteback MemoryWritebackFeature `yaml:"memory_writeback" mapstructure:"memory_writeback"`
-	Core            CoreFeature            `yaml:"core" mapstructure:"core"`
-}
-
-// ValidationFeature 校验功能开关
-type ValidationFeature struct {
-	Enabled              bool `yaml:"enabled" mapstructure:"enabled"`
-	DefaultPassOnFailure bool `yaml:"default_pass_on_failure" mapstructure:"default_pass_on_failure"`
-}
-
-// MemoryWritebackFeature 记忆回写功能开关
-type MemoryWritebackFeature struct {
-	Enabled bool `yaml:"enabled" mapstructure:"enabled"`
-	Async   bool `yaml:"async" mapstructure:"async"`
-}
-
-// CoreFeature 核心业务功能开关（生成/检索/记忆/校验等）
-type CoreFeature struct {
-	Enabled bool `yaml:"enabled" mapstructure:"enabled"`
 }

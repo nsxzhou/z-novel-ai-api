@@ -21,8 +21,3 @@ security:
   cors:
     allowed_origins:
       - "*"
-
-features:
-  validation:
-    enabled: true
-    default_pass_on_failure: true

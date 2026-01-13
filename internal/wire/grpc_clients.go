@@ -21,9 +21,7 @@ type ValidatorGRPCConn *grpc.ClientConn
 
 // ProvideRetrievalGRPCConn 提供检索服务 gRPC 连接
 func ProvideRetrievalGRPCConn(ctx context.Context, cfg *config.Config) (RetrievalGRPCConn, func(), error) {
-	if !cfg.Features.Core.Enabled {
-		return nil, func() {}, nil
-	}
+	// 注意：已移除 features.* 功能开关；是否启用 gRPC clients 由 Wire 注入图决定。
 	conn, err := grpcclient.Dial(ctx, cfg.Clients.GRPC.RetrievalServiceAddr, cfg.Clients.GRPC.DialTimeout)
 	if err != nil {
 		return nil, nil, err
@@ -40,9 +38,6 @@ func ProvideRetrievalGRPCClient(conn RetrievalGRPCConn) retrievalv1.RetrievalSer
 }
 
 func ProvideStoryGenGRPCConn(ctx context.Context, cfg *config.Config) (StoryGenGRPCConn, func(), error) {
-	if !cfg.Features.Core.Enabled {
-		return nil, func() {}, nil
-	}
 	conn, err := grpcclient.Dial(ctx, cfg.Clients.GRPC.StoryGenServiceAddr, cfg.Clients.GRPC.DialTimeout)
 	if err != nil {
 		return nil, nil, err
@@ -58,9 +53,6 @@ func ProvideStoryGenGRPCClient(conn StoryGenGRPCConn) storyv1.StoryGenServiceCli
 }
 
 func ProvideMemoryGRPCConn(ctx context.Context, cfg *config.Config) (MemoryGRPCConn, func(), error) {
-	if !cfg.Features.Core.Enabled {
-		return nil, func() {}, nil
-	}
 	conn, err := grpcclient.Dial(ctx, cfg.Clients.GRPC.MemoryServiceAddr, cfg.Clients.GRPC.DialTimeout)
 	if err != nil {
 		return nil, nil, err
@@ -76,9 +68,6 @@ func ProvideMemoryGRPCClient(conn MemoryGRPCConn) memoryv1.MemoryServiceClient {
 }
 
 func ProvideValidatorGRPCConn(ctx context.Context, cfg *config.Config) (ValidatorGRPCConn, func(), error) {
-	if !cfg.Features.Core.Enabled {
-		return nil, func() {}, nil
-	}
 	conn, err := grpcclient.Dial(ctx, cfg.Clients.GRPC.ValidatorServiceAddr, cfg.Clients.GRPC.DialTimeout)
 	if err != nil {
 		return nil, nil, err

@@ -1,6 +1,6 @@
 # z-novel-ai-api（后端）— 当前状态与目录结构
 
-更新时间：2026-01-09
+更新时间：2026-01-12
 
 本文档面向"维护/二次开发"，目标是让你在 1 分钟内明确：
 
@@ -128,16 +128,15 @@
 
 ## 2. 当前仓库目标与运行模式
 
-### 2.1 默认：CRUD + 对话创作（当前仓库默认）
+### 2.1 默认：HTTP 单体能力（当前仓库默认）
 
 - 目标：基础 CRUD + 对话驱动创作（孵化/迭代/Foundation）+ 章节生成闭环（异步/SSE）+ 检索闭环（Local + Milvus）可运行。
-- 开关：`features.core.enabled=false`
-- 关键行为：API Gateway 启动时不会强依赖核心 gRPC 服务可达。
+- 对外入口：统一由 `cmd/api-gateway` 提供 HTTP API；异步生成由 `cmd/job-worker` 消费 Redis Streams 执行。
+- 依赖关系：不依赖任何 core gRPC 服务；Milvus/Embedding 不可用时会自动降级为“无检索/无索引”。
 
-### 2.2 core（仅用于后续逐步实现核心能力时开启）
+### 2.2 core（gRPC 微服务形态，WIP）
 
-- 开关：`features.core.enabled=true`
-- 说明：当前仓库仍以占位为主；开启 core 只会允许网关尝试建立 gRPC client 连接。
+- 现状：仓库内已包含 gRPC 服务入口 `cmd/*-svc` 与客户端提供者 `internal/wire/grpc_clients.go`，但服务端实现目前均为占位（返回 `Unimplemented`）。
 
 ---
 
@@ -153,6 +152,8 @@ z-novel-ai-api/
 │   ├── api-gateway/             # HTTP API 网关
 │   ├── job-worker/              # 异步任务执行器
 │   ├── bootstrap/               # 系统初始化（创建默认租户与管理员）
+│   ├── admin-svc/               # 占位目录（暂无入口）
+│   ├── file-svc/                # 占位目录（暂无入口）
 │   ├── story-gen-svc/           # gRPC：生成服务（占位）
 │   ├── rag-retrieval-svc/       # gRPC：检索服务（占位）
 │   ├── memory-svc/              # gRPC：记忆服务（占位）
@@ -218,7 +219,7 @@ make migrate-up
 go run ./cmd/bootstrap
 
 # 启动网关
-JWT_SECRET="dev-secret" FEATURES_CORE_ENABLED=false go run ./cmd/api-gateway
+JWT_SECRET="dev-secret" go run ./cmd/api-gateway
 
 # 如需异步生成（/chapters/generate、/foundation/generate），另起进程启动 worker
 go run ./cmd/job-worker
@@ -231,8 +232,8 @@ go run ./cmd/job-worker
 
 ## 6. 当前明确缺口
 
-- `cmd/admin-svc`、`cmd/file-svc`：当前不存在（Makefile 中仍保留占位服务名）。
-- `cmd/*-svc`：gRPC 服务端当前均为占位实现（返回 Unimplemented）；`features.core.enabled=true` 仅会让网关尝试拨号这些服务。
+- `cmd/admin-svc`、`cmd/file-svc`：目前仅保留目录骨架，暂无 `main.go` 入口实现（Makefile 中仍保留占位服务名）。
+- `cmd/*-svc`：gRPC 服务端当前均为占位实现（返回 Unimplemented）；api-gateway 当前也未接入/使用对应 gRPC clients。
 - `api/openapi`：为空目录。
 - `test/`：仅目录骨架，无测试用例。
 - **动态 RBAC**：当前权限模型为硬编码（静态）。

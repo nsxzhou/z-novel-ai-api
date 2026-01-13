@@ -184,11 +184,4 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("security.rate_limit.enabled", true)
 	v.SetDefault("security.rate_limit.requests_per_second", 100)
 	v.SetDefault("security.rate_limit.burst", 200)
-
-	// 功能开关默认值
-	v.SetDefault("features.validation.enabled", true)
-	v.SetDefault("features.validation.default_pass_on_failure", true)
-	v.SetDefault("features.memory_writeback.enabled", true)
-	v.SetDefault("features.memory_writeback.async", true)
-	v.SetDefault("features.core.enabled", false)
 }
